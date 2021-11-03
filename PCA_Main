@@ -1,0 +1,569 @@
+---
+title: "PCA_Mainv_MixOmics_build"
+author: "Galen O'Shea-Stone"
+date: "10/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(MetaboAnalystR)
+library(tidyverse)
+library(rpca)
+library(ggbiplot)
+library(caret)
+library(gplots)
+library(mixOmics)
+library(plotly)
+library(ggfortify)
+library(vegan)
+library(gridExtra)
+```
+
+```{r, echo = FALSE, include=FALSE}
+## This chunk reads in raw .csv performs scaling, normalization and log transform then outputs all the data back into the working directory
+{mSet <- InitDataObjects("conc", "stat", paired = FALSE)
+mSet <- Read.TextData(mSet, "EXAMPLE_DATA_VERY_GOOD.csv", "rowu", "disc")
+#change from rowu to colu for column data vs row 
+#rowp vs colp for paired analysis 
+
+#Perform data processing
+mSet <- SanityCheckData(mSet)
+mSet <- ReplaceMin(mSet);
+mSet <- PreparePrenormData(mSet)
+mSet <- Normalization(mSet, "none", "LogNorm", "AutoNorm", ref= NULL, ratio = FALSE, ratioNum = 20)
+mSet <- PlotNormSummary(mSet, "norm_O_", "png",72, width = NA)
+mSet <- PlotSampleNormSummary(mSet, "snorm_O_", "png",72, width = NA)
+mSet <-SaveTransformedData(mSet)
+}
+
+#after this is done, there will be a new files in the working directory 
+#important one moving forward is titled data_normalized.csv
+```
+
+
+```{r}
+
+m.data.all <- read.csv("data_normalized.csv")
+
+###This chunk does all the analysis of the PLSDA model, the PCA analysis and Random forest###
+
+m.data.all <- read.csv("data_normalized.csv")
+m.data.all <- m.data.all[-c(1)]
+#reads in all data and gets rid of the X comumn (sample ID)
+
+m.data.groups <- read.csv("data_normalized.csv")
+m.data.groups <- m.data.groups$Label
+#m.data.groups <- as.factor(m.data.groups)
+#creates a specific column which is just the treatment group
+
+{m.data <- read.csv("data_normalized.csv")
+m.data <- as.data.frame(m.data)
+m.data <- m.data[-c(1:2)]
+}
+
+X <- as.matrix(m.data)
+
+X <- X * -1
+#creates vector with only numerical matrix
+Y <- as.factor(m.data.groups)  
+#creates factor vector with group separation
+set.seed(0666)
+#for reproducibility
+
+## PLS-DA function
+pca.res <- pca(X, ncomp = 5, max.iter = 100, center = TRUE, scale = FALSE,  tol = 1e-09, logratio = "none")
+# where ncomp is the number of components wanted
+#computes PCA model using MixOmics package 
+
+plot(pca.res)  # screeplot of the eingenvalues (explained variance per component)
+
+test.pca <- plotIndiv(pca.res)
+
+
+
+contrib_metabs <- as.data.frame(pca.res$loadings$X)
+
+contrib_metabs <- tibble::rownames_to_column(contrib_metabs, "Metabolite")
+
+contrib_metabs <-contrib_metabs[order(contrib_metabs$PC1), ]
+#sorts them
+contrib_metabs$Metabolite <- factor(contrib_metabs$Metabolite, levels = contrib_metabs$Metabolite)
+# convert to factor to retain sorted order in plot.
+#not used reight now. Might use later 
+contrib_metabs$PC1 <- round(contrib_metabs$PC1, 4)
+#this is needed to simplify the amount of decimals for the later plots
+
+contrib.metab.fig <- ggplot(contrib_metabs, aes(x=Metabolite, y=PC1, fill = PC1)) + 
+                      geom_bar(stat='identity', width=.5)  +
+                      scale_fill_continuous(low="blue", high="red") +
+                      theme_bw() +
+                      labs(subtitle="", 
+                           title= "PCA Metabolite Importance: Component 1 ") +
+                        ylab("Importance") +
+                      coord_flip()
+#creates diverging bars plot
+
+
+contrib.metab.fig 
+
+
+
+ggsave("Importance_PC1.pdf", plot = contrib.metab.fig, units="in", width= 8, height=10, dpi=4000)
+#ggsave("Importance.tiff", plot = contrib.metab.fig, units="in", width= 7, height=9, dpi=1000, compression = 'lzw')
+
+
+contrib_metabs2 <- as.data.frame(pca.res$loadings$X)
+
+contrib_metabs2 <- tibble::rownames_to_column(contrib_metabs2, "Metabolite")
+contrib_metabs2 <-contrib_metabs[order(contrib_metabs$PC2), ]
+#sorts them
+contrib_metabs2$Metabolite <- factor(contrib_metabs2$Metabolite, levels = contrib_metabs2$Metabolite)
+# convert to factor to retain sorted order in plot.
+#not used reight now. Might use later 
+contrib_metabs$PC2 <- round(contrib_metabs$PC2, 4)
+#this is needed to simplify the amount of decimals for the later plots
+contrib.metab.fig <- ggplot(contrib_metabs2, aes(x=Metabolite, y=PC2, fill = PC2)) + 
+                      geom_bar(stat='identity', width=.5)  +
+                      scale_fill_continuous(low="blue", high="red") +
+                      theme_bw() +
+                      labs(subtitle="", 
+                           title= "PCA Metabolite Importance: Component 2 ") +
+                        ylab("Importance") +
+                      coord_flip()
+#creates diverging bars plot
+
+contrib.metab.fig 
+
+ggsave("Importance_PC2.pdf", plot = contrib.metab.fig, units="in", width= 8, height=10, dpi=4000)
+#ggsave("Importance2.tiff", plot = contrib.metab.fig, units="in", width= 7, height=9, dpi=1000, compression = 'lzw')
+
+
+contrib_metabs3 <- as.data.frame(pca.res$loadings$X)
+
+contrib_metabs3 <- tibble::rownames_to_column(contrib_metabs3, "Metabolite")
+contrib_metabs3 <-contrib_metabs[order(contrib_metabs$PC3), ]
+#sorts them
+contrib_metabs3$Metabolite <- factor(contrib_metabs3$Metabolite, levels = contrib_metabs3$Metabolite)
+# convert to factor to retain sorted order in plot.
+#not used reight now. Might use later 
+contrib_metabs$PC3 <- round(contrib_metabs$PC3, 4)
+#this is needed to simplify the amount of decimals for the later plots
+contrib.metab.fig <- ggplot(contrib_metabs3, aes(x=Metabolite, y=PC3, fill = PC3)) + 
+                      geom_bar(stat='identity', width=.5)  +
+                      scale_fill_continuous(low="blue", high="red") +
+                      theme_bw() +
+                      labs(subtitle="", 
+                           title= "PCA Metabolite Importance: Component 3 ") +
+                        ylab("Importance") +
+                      coord_flip()
+#creates diverging bars plot
+
+contrib.metab.fig 
+
+ggsave("Importance_PC3.pdf", plot = contrib.metab.fig, units="in", width= 8, height=10, dpi=4000)
+#ggsave("Importance2.tiff", plot = contrib.metab.fig, units="in", width= 7, height=9, dpi=1000, compression = 'lzw')
+
+
+#FROM OLDER VERSION OF CODE...NOW ONLY USED FOR COMPARISON TO THE NEW PLOT FOR QC CHECK
+contrib.metabs <- plotLoadings(pca.res, comp = 1, contrib = 'max', method = 'median', legend.title = "Capture", ndisplay = 100, size.legend = 1, title = "Importance to Component 1", size.title = 1.0)
+#change the desired component here#loads the data as a dataframe using plotLoading function from MixOmics
+#***MAKE SURE TO LOOK AT ENTIRE PLOT BY MAXIMIZING TO COMPARE!!! Plot shown below is truncated version
+
+
+###FOR 3D PLSDA SEE BELOW!!!!####
+#plotIndiv(plsda.res, style="3d")
+#use this to create a 3D PLSDA
+
+
+```
+
+
+contrib.metabs <- plotLoadings(pca.res, comp = 2, contrib = 'max', method = 'median', legend.title = "Capture", ndisplay = 100, size.legend = 1, title = "Importance to Component 1", size.title = 1.0)
+#change the desired component here#loads the data as a dataframe using plotLoading function from MixOmics
+
+pca.test <- pca.res$loadings$X
+
+
+pca.plot <-cbind(contrib.metabs, pca.res$names$X)
+
+colnames(pca.plot)[2] <- "Metabolite"
+
+contrib.metabs <- pca.plot[order(pca.plot$importance), ]
+#sorts them
+contrib.metabs$Metabolite <- factor(contrib.metabs$Metabolite, levels = contrib.metabs$Metabolite)
+# convert to factor to retain sorted order in plot.
+#not used reight now. Might use later 
+contrib.metabs$importance <- round(contrib.metabs$importance, 4)
+#this is needed to simplify the amount of decimals for the later plots
+
+
+
+
+```{r}
+
+set.seed(0666) # for reproducbility in this vignette, otherwise increase nrepeat
+
+pca.test <- pca.res$variates$X
+
+pca.data <- (pca.res$variates$X)
+#pulls the scores data from the plsda model 
+
+pca.data <- as.data.frame(pca.data)
+#changes into dataframe for ggplot 
+
+m.data.groups <- as.data.frame(m.data.groups)
+#changes groups back into dataframe instead of matrix 
+
+new.pca.data <- cbind(pca.data, m.data.groups)
+#combines the groups with the plsda components data 
+
+names(new.pca.data)[names(new.pca.data) == "m.data.groups"] <- "Group"
+#changes column name to Label (just to tidy up)
+
+comp.var <- as.data.frame(pca.res$explained_variance)
+#pulls out the explained variances for the selected components 
+comp.var <- as.data.frame(t(comp.var))
+#transposes the dataframe for referencing 
+
+comp1.var <-comp.var$`PC1`
+comp2.var <-comp.var$`PC2`
+comp3.var <-comp.var$`PC3`
+
+##BELOW WILL BE THE VARIENCES FOR COMP 1 & 2##
+comp1.var
+#component 1 variance 
+comp2.var
+#component 2 variance 
+comp1.var <- comp1.var *100
+comp2.var <- comp2.var *100
+comp3.var <- comp3.var *100
+#multiplies both by 100 for %
+comp1.var <- signif(comp1.var, 4)
+comp2.var <- signif(comp2.var, 4)
+comp3.var <- signif(comp3.var, 4)
+print("Above are the variences for component 1 (top) and component 2 (bottom)")
+#see the end of chunk
+
+pca.plot <- ggplot(new.pca.data, aes(x= PC1, y= PC2, color = Group)) +
+              geom_jitter(size = 1.0, shape = 19, fill = "black", stroke = 1.4, aes(color = Group)) +
+              #change the shape and size of the points above 
+              theme_bw() +
+              #changes the theme of the plot 
+              ggtitle("YOUR_TITLE_HERE") +
+              ###MAKE SURE TO INSERT TITLE HERE
+              xlab(paste("Component 1:", comp1.var, "%"))+
+              ylab(paste("Component 2:", comp2.var, "%")) +
+              #inserts variance for specific components  
+              scale_color_manual(name="Variety", values=c("darkorchid2","darkorange", "springgreen2", "cyan")) +
+              #changes the color nanually and easier than below using scale_color_hue
+              stat_ellipse(type = "t", geom = "polygon", alpha = 1/4, aes(fill = Group), show.legend = FALSE) + 
+              scale_fill_manual(values=c("darkorchid2","darkorange", "springgreen2", "cyan")) 
+              #geom_text(label = m.data)
+#you will need to  add the amount of variance for each sample manually...get this from MA code? --> ...work in progress
+#plsda.plot
+
+#you will need to  add the amount of variance for each sample manually...get this from MA code? --> ...work in progress
+#plsda.plot
+  
+pca.plot <- pca.plot + stat_ellipse(type = "t") 
+#sets the confidence interval type (norm = 95%) --> this can be customized(see below)
+#The default "t" assumes a multivariate t-distribution, and "norm" assumes a multivariate normal distribution. "euclid" draws a circle with the radius equal to level, representing the euclidean distance from the center. This ellipse probably won't appear circular unless coord_fixed() is applied.
+#plsda.plot <- plsda.plot + scale_color_brewer(palette="dark2")
+#uses scale color brewer to set colors
+
+#plsda.plot <- plsda.plot + scale_color_hue(l=70, c=90)
+#The lightness (l) and the chroma (c, intensity of color) of the default 
+#(hue) colors can be modified using the functions scale_hue 
+
+
+###OR###
+
+#insert this for color
+#scale_color_manual(name="Variety", values=c("springgreen2", "firebrick2")) 
+#change colors manually using R names 
+  
+#Insert code to change the title here if needed 
+
+pca.plot <- pca.plot + theme(plot.title = element_text( face = "bold", color = "black", size = NA))
+
+
+#below is options for the legend of the PLSDA plot
+pca.plot <- pca.plot +
+  theme(legend.position="right") +
+              theme(legend.title = element_text(colour="Black", size=14, face="plain")) +
+              theme(legend.text = element_text(colour="black", size=14, face="plain")) +
+              #theme(legend.background = element_rect(fill="lightblue", size=0.5, linetype="solid", colour ="darkblue")) +
+              #creates box around legend 
+              theme(legend.title = element_blank()) +
+              #removes plot legend title
+              theme(legend.position='bottom') 
+              #removes entire legend or changes the location of legend ("left", "right", "bottom" etc... )
+              #scale_x_reverse()
+              #this is needed to flip x axis to match metaboanalyst as of 10/14/20 ...sometimes...
+              #double check that this is needed and turn off or on as needed
+
+
+pca.plot
+#shows the plot for pre-editing
+
+
+#Saves ROC and PLSDA to working directory 
+
+#work on plotting the ROC better in later builds
+
+ggsave("High_Quality_PCA.pdf", plot = pca.plot, units="in", width= 12, height= 10, dpi=2000)
+#turn this off if you don't want a pdf version
+
+
+#ggsave("High_Quality_PLSDA.tiff", plot = plsda.plot, units="in", width= 6, height=5, dpi=400, compression = 'lzw')
+#creates a high quality file of the PLSDA plot in the working dir 
+#use the above code to make journal quality files
+```
+
+
+
+
+
+```{r}
+#3D PCA DEVELOPMENT CHUNK
+
+PCA.data.3D <- as.factor(new.pca.data$Group)
+
+
+comp1.var
+comp2.var
+comp3.var
+
+PC1.X <- new.pca.data$PC1
+PC2.Y <- new.pca.data$PC2
+PC3.Z <- new.pca.data$PC3
+
+
+
+fig <- plot_ly(new.pca.data, x = ~PC1, y = ~PC2, z = ~PC3, color = ~Group, colors = c("darkorchid2","darkorange"))
+               marker = list(color = ~PC1, colorscale = c('#FFE1A1', '#683531'), showscale = TRUE)
+fig <- fig %>% add_markers(marker = list(size = 5,
+                             #color = c("darkorchid2","darkorange"),
+                             line = list(color = c ("blue4","black"),
+                                         width = 1)))
+fig <- fig %>% layout(title = "INSERT_TITLE_HERE", plot_bgcolor = "#e5ecf6")
+fig <- fig %>% layout(scene = list(xaxis = list(title = "PC 1: INSERT_VAR_HERE%"),
+                     yaxis = list(title = "PC 2: INSERT_VAR_HERE%"),
+                     zaxis = list(title = "PC 3: INSERT_VAR_HERE%")))
+fig
+#export(fig, file = "3D_Scatterplot.png")
+```
+
+
+```{r}
+#exploring to make a useful biplot
+
+
+
+Y.df <- as.data.frame(Y)
+Y.df <- rename(Y.df, Treatment = Y)
+#if this is an error try clearing environment and restarting R over again... not sure what is interfering
+pca_res <- prcomp(X,scale = TRUE, retx = TRUE)
+#creates prcomp object
+
+autoplot(pca_res)
+
+biplot.obj <- autoplot(pca_res, data = Y.df, colour = 'Treatment', label = FALSE, label.size = 10,
+         loadings = TRUE, loadings.label = TRUE, loadings.label.size  = 5,  loadings.colour = 'black', 
+         frame = TRUE, frame.type = "t", loadings.label.repel=TRUE, max.overlaps = NA) +
+  ggtitle(label = "Principal Component Analysis Biplot") +
+  theme_classic() +
+  scale_color_manual(values=c("darkorchid2","darkorange", "springgreen2", "cyan")) +
+              #changes the color nanually and easier than below using scale_color_hue
+              stat_ellipse(type = "t", geom = "polygon", alpha = 1/4, aes(fill = Treatment), show.legend = FALSE) + 
+              scale_fill_manual(values=c("darkorchid2","darkorange", "springgreen2", "cyan")) 
+#if there are too may vertors that show up reset environment and redo
+biplot.obj
+
+ggsave("High_Quality_PCA_biplot.pdf", plot = biplot.obj, units="in", width= 14, height= 12, dpi=5000)
+
+
+
+
+
+```
+
+```{r}
+
+m.data.PERMANOVA <- read.csv("data_normalized.csv")
+m.data.PERMANOVA <- m.data.PERMANOVA[-c(1)]
+#reads in all data and gets rid of the X comumn (sample ID)
+
+X <- as.matrix(m.data)
+
+X <- X * -1
+#creates vector with only numerical matrix
+
+set.seed(666)
+
+PERMANOVA.results <- adonis(X ~ Label, data = m.data.PERMANOVA, permutations =  999, method = "euclidean" )
+#can change method to any below
+#Dissimilarity index, partial match to "manhattan", "euclidean", "canberra", "clark", "bray", "kulczynski", "jaccard", "gower", "altGower", "morisita", "horn", "mountford", "raup", "binomial", "chao", "cao", "mahalanobis", "chisq" or "chord".
+
+PERMANOVA.results2 <- adonis2(X ~ Label, data = m.data.PERMANOVA, permutations =  999, method = "euclidean", by = "margin")
+# by = NULL tests if model as whole is significant 
+#by = "margins" means order doesnt matter in model 
+
+
+PERMANOVA.results
+PERMANOVA.results2
+
+PMANOVA.table <- as.data.frame(PERMANOVA.results$aov.tab)
+PMANOVA.table2 <- as.data.frame(PERMANOVA.results2$aov.tab)
+
+ANOSIM.data <- read.csv("data_normalized.csv")
+m.data.ANOSIM.data <- ANOSIM.data[-c(1)]
+
+
+
+metab.dist <- vegdist(X)
+attach(ANOSIM.data)
+metab.ano <- anosim(metab.dist, Label, permutations = 999, distance = "euclidian")
+summary(metab.ano)
+plot(metab.ano)
+
+metab.ano
+
+
+
+
+```
+
+
+
+
+
+#BELOW DOES MORE COLORS IMPORTANCE PLOTS
+
+m.data.all <- read.csv("data_normalized.csv")
+
+###This chunk does all the analysis of the PLSDA model, the PCA analysis and Random forest###
+
+m.data.all <- read.csv("data_normalized.csv")
+m.data.all <- m.data.all[-c(1)]
+#reads in all data and gets rid of the X comumn (sample ID)
+
+m.data.groups <- read.csv("data_normalized.csv")
+m.data.groups <- m.data.groups$Label
+#m.data.groups <- as.factor(m.data.groups)
+#creates a specific column which is just the treatment group
+
+{m.data <- read.csv("data_normalized.csv")
+m.data <- as.data.frame(m.data)
+m.data <- m.data[-c(1:2)]
+}
+
+
+
+
+X <- as.matrix(m.data)
+
+X <- X * -1
+#creates vector with only numerical matrix
+Y <- as.factor(m.data.groups)  
+#creates factor vector with group separation
+set.seed(0666)
+#for reproducibility
+
+## PLS-DA function
+pca.res <- pca(X, Y, ncomp = 5, max.iter = 100, center = TRUE, scale = FALSE,  tol = 1e-09, logratio = "none")
+# where ncomp is the number of components wanted
+#computes PCA model using MixOmics package 
+
+contrib.metabs <- plotLoadings(pca.res, comp = 2, contrib = 'max', method = 'median', legend.title = "Capture", ndisplay = 100, size.legend = 1, title = "Importance to Component 1", size.title = 1.0)
+#change the desired component here#loads the data as a dataframe using plotLoading function from MixOmics
+
+pca.plot <-cbind(contrib.metabs, pca.res$names$X)
+
+colnames(pca.plot)[2] <- "Metabolite"
+
+contrib.metabs <- pca.plot[order(pca.plot$importance), ]
+#sorts them
+contrib.metabs$Metabolite <- factor(contrib.metabs$Metabolite, levels = contrib.metabs$Metabolite)
+# convert to factor to retain sorted order in plot.
+#not used reight now. Might use later 
+contrib.metabs$importance <- round(contrib.metabs$importance, 2)
+#this is needed to simplify the amount of decimals for the later plots
+
+
+
+contrib.metab.fig <- ggplot(contrib.metabs, aes(x=Metabolite, y=importance, fill = importance)) + 
+                      geom_bar(stat='identity', width=.5)  +
+                      scale_fill_continuous(low="blue", high="red") +
+                      theme_bw() +
+                      labs(subtitle="", 
+                           title= "PCA Model: Metabolite Importance ") +
+                        ylab("Importance") +
+                      coord_flip()
+#creates diverging bars plot
+
+
+contrib.metab.fig 
+
+
+ggsave("Importance.pdf", plot = contrib.metab.fig, units="in", width= 7, height=9, dpi=1000)
+
+#ggsave("Importance.tiff", plot = contrib.metab.fig, units="in", width= 7, height=9, dpi=1000, compression = 'lzw')
+#use if you want .tiff
+
+contrib.metab.fig <- ggplot(contrib.metabs, aes(x=Metabolite, y=importance, fill = importance)) + 
+                      geom_bar(stat='identity', width=.5)  +
+                      scale_fill_continuous(low="springgreen2", high="aquamarine4") +
+                      theme_bw() +
+                      labs(subtitle="", 
+                           title= "PCA Model: Metabolite Importance ") +
+                        ylab("Importance") +
+                      coord_flip()
+#creates diverging bars plot
+
+
+contrib.metab.fig 
+
+ggsave("Importance2.pdf", plot = contrib.metab.fig, units="in", width= 7, height=9, dpi=1000)
+
+#ggsave("Importance2.tiff", plot = contrib.metab.fig, units="in", width= 7, height=9, dpi=1000, compression = 'lzw')
+#use if you want .tiff
+
+
+
+
+
+```{r}
+
+#the code below is being developed for iPCA analysis--in progress
+
+data("liver.toxicity")
+X = liver.toxicity$gene
+
+m.data.all <- read.csv("data_normalized.csv")
+
+m.data.all <- m.data.all[-c(2)]
+#pulls in OTU data
+m.data.all <- data.frame(m.data.all[,-1], row.names=m.data.all[,1])
+
+m.data.groups <- read.csv("data_normalized.csv")
+m.data.groups <- m.data.groups$Label
+
+IPCA.test <- ipca(X, ncomp = 5, mode = "deflation", scale = FALSE, fun = "logcosh")
+
+plotIndiv(IPCA.test,group = m.data.groups,  legend = TRUE, title = 'IPCA TEST')
+sPLS.plot <- plotIndiv(IPCA.test, group = m.data.groups , ind.names = TRUE, legend=TRUE,
+          ellipse = TRUE, star = FALSE, title = "IPCA TEST ", rep.space = "XY-variate")
+
+
+plotLoadings(IPCA.test)
+
+```
+
+
+
+
