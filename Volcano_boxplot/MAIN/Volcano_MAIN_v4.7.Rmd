@@ -1,0 +1,460 @@
+---
+title: "Volcano_violin_Main_v4.3.0"
+author: "Galen O'Shea-Stone"
+date: "7/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(MetaboAnalystR) 
+library(tidyverse)
+#library(reshape)
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+library(ggthemes)
+library(dplyr)
+#library(hrbrthemes)
+#library(viridis)
+#library(data.table)
+library(plyr)
+library(caret)
+library(gplots)
+library(ggsignif)
+library(ggpubr)
+```
+
+```{r, echo = FALSE, include=FALSE}
+## This chunk reads in raw .csv performs scaling, normalization and log transform then outputs all the data back into the working directory
+mSet <- InitDataObjects("conc", "stat", paired = FALSE)
+mSet <- Read.TextData(mSet, "EXAMPLE_DATA_2_GROUP.csv", "rowu", "disc")
+#change from rowu to colu for column data vs row 
+#rowp vs colp for paired analysis 
+
+#Perform data processing
+mSet <- SanityCheckData(mSet)
+mSet <- ReplaceMin(mSet);
+mSet <- PreparePrenormData(mSet)
+mSet <- Normalization(mSet, "none", "LogNorm", "AutoNorm", ref= NULL, ratio = FALSE, ratioNum = 20)
+mSet <- PlotNormSummary(mSet, "norm_O_", "png",72, width = NA)
+mSet <- PlotSampleNormSummary(mSet, "snorm_O_", "png",72, width = NA)
+mSet <-SaveTransformedData(mSet)
+
+
+#after this is done, there will be a new files in the working directory 
+#important one moving forward is titled data_normalized.csv
+```
+
+```{r}
+
+mSet.1 <- Volcano.Anal(mSet, paired = FALSE, fcthresh = 1.5, cmpType = F, 
+                       percent.thresh = 0.75, nonpar = F, threshp = 0.05, equal.var = T, pval.type = "raw")
+                #CHANGE ALL VARIABLES HERE
+
+#print(mSet$analSet$volcano$fc.all)
+#how to pull out the data table? needs to be done as a write to csv? 
+
+mSet.1 <- PlotVolcano(mSet.1, "volcano_plot_", plotLbl = 1, format = "png", dpi = 72, width = NA)
+knitr::include_graphics("volcano_plot_dpi72.png")
+
+volcano.data <- read.csv("volcano.csv", sep=",")
+#reads in the data
+
+volcano.data <- volcano.data %>% select(1,3,5)  
+#selects only the data of interest for the volcano plot
+
+names(volcano.data) <- c("Metabolite","log2.FC.", "X.log10.p.")
+#renames the columns- needed to be done to label the first column 
+
+volcano.data <- as.data.frame(volcano.data)
+#reverts to dataframe 
+
+v.plot <-  ggplot(volcano.data) +
+            geom_point(aes(x= log2.FC., y= X.log10.p.,  color = volcano.data$X.log10.p.)) + 
+                theme_bw() +
+                scale_color_gradient(low = "blue", high = "red") +
+                xlab("log2 Fold Change (FC>INSERT_HERE)") + 
+                ylab("-log10(p) (p<0.01)") +
+                ggtitle("YOUR_TITLE_HERE") +
+                geom_text_repel((aes(x= log2.FC., y= X.log10.p., label = Metabolite))) +
+                #adds metabolite labels to volcano plot
+                 #scale_y_continuous(limits = c(0,50)) +
+                    theme(legend.position = "none",
+                          plot.title = element_text(size = rel(1.5), hjust = 0.5),
+                          axis.title = element_text(size = rel(1.25)))
+
+
+
+#v.plot + geom_text_repel((aes(x= log2.FC., y= X.log10.p., label = Metabolite, 
+                 #box.padding   = 0.35, 
+                 #point.padding = 0.5,
+                 #segment.color = 'grey50')))
+#getwd()
+
+png(filename = "VOLCANO_PLOT_HERE.png",
+    width = 480, height = 480, units = "px", pointsize = 12,
+     bg = "white",  res = NA)
+v.plot + geom_text_repel((aes(x= log2.FC., y= X.log10.p., label = Metabolite
+)))
+dev.off()
+
+v.plot
+
+
+ggsave("High_Quality_volcano_plot.pdf", plot = v.plot, units="in", width= 6, height=5, dpi=400)
+#ggsave("High_Quality_volcano_plot.tiff", plot = v.plot, units="in", width= 6, height=5, dpi=400, compression = 'lzw')
+
+
+```
+
+```{r}
+mSet.2 <- Volcano.Anal(mSet, paired = FALSE, fcthresh = 1.5, cmpType = F, 
+                       percent.thresh = 0.75, nonpar = F, threshp = 0.05, equal.var = T, pval.type = "raw")
+
+volcano.data <- read.csv("volcano.csv", sep=",")
+
+
+norm.data <- mSet$dataSet$norm
+#extract the normalized data from the large list created in the preprocessing
+#norm.data <- as.data.frame(norm.data)
+
+#cls <- as.data.frame(mSet$dataSet$cls)
+#mutate(norm.data, norm.data + mSet$dataSet$cls)
+
+status <- mSet$dataSet$cls
+
+x <-  mSet$dataSet$norm
+norm.data <- add_column(x, status, .before = T)
+#combines the status set into the data for differentiation 
+
+norm.data$status <- mapvalues(norm.data$status, from = c(0,1), to = c("FD", "Relative"))
+#used in the paired version of this tool--not needed for unpaired
+
+#norm.data <- t(norm.data)
+#transposes the data so metabolite name is a column
+
+signif.values <- read.csv("volcano.csv")
+#gathers list of significant metabolites from volcano analysis
+
+s.v <- as.character(signif.values$X)
+#print(s.v)
+
+#stores the list of significant metabolites as character vector
+
+norm.data %>%
+    select(status , s.v) %>%
+    pivot_longer(., cols = c(s.v), names_to = "Var", values_to = "Val") %>%
+    ggplot(aes(x = Var, y = Val, fill = status)) +
+    geom_violin(trim = FALSE) +
+    geom_boxplot(width=0.1, color="white", alpha=0.2, show.legend = FALSE) 
+#creates graph in r 
+    
+total.boxplot <- norm.data %>%
+    select(status , s.v) %>%
+    pivot_longer(., cols = c(s.v), names_to = "Var", values_to = "Val") %>%
+    ggplot(aes(x = Var, y = Val, fill = status)) +
+    geom_boxplot() + 
+    ggtitle("Helicopter vs. Dart Capture") +
+    geom_jitter(size = 0.1) +
+    ylab("Fold Change(FC>1.5)") + 
+    xlab("Significant Metabolites (p<0.05)") +
+    theme(text = element_text(size = 10)) +
+
+
+
+    #geom_boxplot(width=0.1, color="white", alpha=0.2, show.legend = FALSE) 
+
+#creates an object for export 
+     
+png(filename = "ALL_SIGNIFICANT_BOXPLOT_HERE",
+    width = 2000, height = 500, units = "px", pointsize = 12,
+     bg = "white",  res = NA)
+total.boxplot
+dev.off()
+  
+dodge <- position_dodge(width = 1.0)
+#aligns the boxplots (below) with the violin and can adjust the spacing between the plots 
+
+total.violin <- norm.data %>%
+    select(status , s.v) %>%
+    pivot_longer(., cols = c(s.v), names_to = "Var", values_to = "Val") %>%
+    ggplot(aes(x = Var, y = Val, fill = status)) +
+    geom_violin(trim= FALSE, position = dodge) +
+    #position is set above on line 179...for boxplots to aligh later 
+    geom_jitter(size = 1.4) + 
+    scale_fill_manual(values=c("#A967E6", "#E9A841", "#88E694","#660000","#6666FF","#0000FF","#000099","#000066"))+
+    ggtitle("INSERT_TITLE_HERE") +
+    ylab("Fold Change (FC>2.0)") + 
+    xlab("Significant Metabolite (p<0.05) ") +
+    theme_bw() +
+    theme(text = element_text(face = "bold", size = 8.5)) +
+    scale_fill_manual(values=c("#A967E6", "#E9A841", "#88E694","#660000","#6666FF","#0000FF","#000099","#000066"))+
+    #Manually changes the color of the variables 
+    #https://www.rapidtables.com/web/color/RGB_Color.html
+    #see above website for good tool to find color
+    stat_summary(fun = mean, geom="point",colour="red1", size=1, position=position_dodge(width=0.75)) +
+    #change the position_dodge width if the mean points are not aligning correctly with the groups
+    theme(legend.title = element_blank()) +
+    #changes or deletes  legend title size--change too element_text(size = XX)
+    theme(legend.text =  element_text(size = 25)) +
+    #changes legend text size 
+    theme(legend.position='bottom') +
+    # deletes entire legend
+    theme(axis.text=element_text(size=20), axis.title=element_text(size=25,face="bold")) +
+    #changes the size of axis text (first), and then size of axis labels (second)
+    theme(legend.background = element_rect(fill= NULL, size=0.5, linetype="solid", colour ="black")) +
+    #creates box around legend 
+    theme(axis.ticks.x = element_blank()) +
+    facet_wrap(~ Var, nrow = 3,  labeller = labeller(groupwrap = label_wrap_gen(15)), scales = "free") +
+    #facet wraps --> set number of rows here also specifies the width of the facets
+    theme(axis.text.x=element_blank()) +
+    
+    theme(plot.title = element_text(size=30)) +
+    #change sizew of title
+     theme(strip.text.x = element_text(
+        size = 20, color = "Black", face = "bold")) + 
+    #changes the size of the facet plot titles
+    ylim(-3.5, 3.5)
+    #changes y limits for size 
+
+total.violin <- total.violin + geom_boxplot(width=0.1, position = dodge)
+#adds boxplots inside the violin plots 
+
+
+
+#creates an object for export 
+     
+png(filename = "ALL_SIGNIFICANT_VIOLIN_PLOT_HERE",
+    width = 2000, height = 500, units = "px", pointsize = 12,
+     bg = "white",  res = NA)
+total.violin
+dev.off()
+#exports png to working directory
+
+jpeg(filename = "ALL_SIGNIFICANT_VIOLIN_PLOT_HERE",
+    width = 2000, height = 500, units = "px", pointsize = 12,
+     bg = "white",  res = NA, quality = 100)
+total.violin
+dev.off()
+
+
+total.violin
+
+ggsave("High_Quality_Violin.pdf", plot = total.violin, units="in", width= 22, height=20, dpi=5000)
+#ggsave("High_Quality_Violin.tiff", plot = total.violin, units="in", width= 6, height=5, dpi=400, compression = 'lzw')
+
+#exports jpeg 
+```
+
+```{r}
+#the chunnk below will export a high quality boxplot of all the signioficant metabolites using the parameters from the previous chunk on lines ~109-110
+total.boxplot.facet <- norm.data %>%
+    select(status , s.v) %>%
+    pivot_longer(., cols = c(s.v), names_to = "Var", values_to = "Val") %>%
+    ggplot(aes(x = Var, y = Val, fill = status)) +
+    geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=1.0, notch=F) +
+    #The notch displays a confidence interval around the median which is normally based on the median +/- 1.58*IQR/sqrt(n).           Notches are used to compare groups; if the notches of two boxes do not overlap, this is a strong evidence that the medians      differ.
+    #geom_jitter(size = 0.1, shape=16, position=position_jitter(0.2)) +
+    scale_color_brewer(palette="Dark2") +
+    scale_fill_brewer(palette="Dark2") +
+    #changes color of the fill
+    ggtitle("INSERT_TITLE_HERE ") +
+    ylab("Fold Change(FC_METRIC_HERE)") + 
+    xlab("Significant Metabolites (p<0.05)") +
+    theme(text = element_text(face = "bold", size = 8.5)) +
+    scale_fill_manual(values=c("#A967E6", "#E9A841", "#88E694","#660000","#6666FF","#0000FF","#000099","#000066"))+
+    #Manually changes the color of the variables 
+    #https://www.rapidtables.com/web/color/RGB_Color.html
+    #see above website for good tool to find color
+    stat_summary(fun = mean, geom="point",colour="red1", size=1, position=position_dodge(width=0.75)) +
+    #change the position_dodge width if the mean points are not aligning correctly with the groups
+    theme(legend.title = element_blank()) +
+    #changes or deletes  legend title size--change too element_text(size = XX)
+    theme(legend.text =  element_text(size = 15)) +
+    #changes legend text size 
+    theme(legend.position='right') +
+    # deletes entire legend
+    theme(axis.text=element_text(size=10), axis.title=element_text(size=14,face="bold")) +
+    #changes the size of axis text (first), and then size of axis labels (second)
+    theme(legend.background = element_rect(fill= NULL, size=0.5, linetype="solid", colour ="black")) +
+    #creates box around legend 
+    theme(axis.ticks.x = element_blank()) +
+    facet_wrap(~ Var, nrow = 3,  labeller = labeller(groupwrap = label_wrap_gen(15)), scales = "free") +
+    #facet wraps --> set number of rows here also specifies the width of the facets
+    theme(axis.text.x=element_blank()) +
+    
+    theme(plot.title = element_text(size=22)) +
+    #change sizew of title
+     theme(strip.text.x = element_text(
+        size = 15, color = "Black", face = "bold")) + 
+    #changes the size of the facet plot titles
+    ylim(-2.5, 2.5)
+    #changes y limits for size 
+
+
+total.boxplot.facet <- total.boxplot.facet + geom_signif(stat = "signif", comparisons = c("Control", "HD_Overnight"))
+
+total.boxplot.facet
+
+jpeg(filename = "FACET_TEST_HERE",
+    width = 2000, height = 500, units = "px", pointsize = 12,
+     bg = "white",  res = NA, quality = 100)
+total.boxplot.facet
+dev.off()
+
+
+ggsave("High_Quality_boxplot_HERE.pdf", plot = total.boxplot.facet, units="in", width=20, height=16, dpi=5000)
+#ggsave("High_Quality_boxplot.tiff", plot = total.boxplot.facet, units="in", width= 6, height=5, dpi=400, compression = 'lzw')
+
+
+get_legend(total.boxplot.facet, position = "right")
+
+leg <- get_legend(plsda.plot)
+leg <- as_ggplot(leg)
+
+ggsave("Legend_here.pdf", plot = leg, units = "in", width= 10, height= 10, dpi= 2000 )
+
+#use this to create a legend that you can clip and use to put into any figures you might need! 
+
+
+```
+
+###OLD CODE BELOW
+
+total.violin.facet <- norm.data %>%
+    select(status , s.v) %>%
+    pivot_longer(., cols = c(s.v), names_to = "Var", values_to = "Val") %>%
+    ggplot(aes( y = Val, x = status, fill = status)) +
+    geom_violin() + 
+    geom_jitter(size = 0.1, shape=16, position=position_jitter(0.2)) +
+    ggtitle("All Capture Techniques") +
+    ylab("Fold Change(FC>2.0)") + 
+    xlab("Significant Metabolites (p<0.05)") +
+    scale_fill_brewer(palette="Dark2") +
+    theme(text = element_text(size = 10)) +
+    facet_grid(~ Var) +
+    theme(axis.text.x=element_blank()) +
+    theme(axis.ticks.x = element_blank())
+
+
+#need to fix the wrap here and also set up parameters for the width/ height
+
+total.violin.facet
+
+jpeg(filename = "FACET_TEST_HERE",
+    width = 2000, height = 500, units = "px", pointsize = 12,
+     bg = "white",  res = NA, quality = 100)
+total.violin.facet
+dev.off()
+
+
+ggsave("High_Quality_Violin_BAD.pdf", plot = total.violin.facet, units="in", width= 6, height=5, dpi=400)
+#ggsave("High_Quality_Violin.tiff", plot = total.violin.facet, units="in", width= 6, height=5, dpi=400, compression = 'lzw')
+
+
+
+
+
+```{r}
+#boxplots with error bars 
+
+total.boxplot.facet2 <- norm.data %>%
+    select(status , s.v) %>%
+    pivot_longer(., cols = c(s.v), names_to = "Var", values_to = "Val") %>%
+    ggplot(aes( y = Val, x = status, fill = status), geom='errorbar', linetype=1, width=0.5) +  # adds whiskers
+    geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=0.5, notch=F, notchwidth = 0.2) +
+    #The notch displays a confidence interval around the median which is normally based on the median +/- 1.58*IQR/sqrt(n).           Notches are used to compare groups; if the notches of two boxes do not overlap, this is a strong evidence that the medians      differ.
+    #geom_jitter(size = 0.1, shape=16, position=position_jitter(0.2)) +
+    scale_color_brewer(palette="Dark2") +
+    scale_fill_brewer(palette="Dark2") +
+    #changes color of the fill
+    ggtitle("YOUR_TITLE_HERE") +
+    ylab("Fold Change(FC>X.0)") + 
+    xlab("Significant Metabolites (p<0.05)") +
+    theme(text = element_text(face = "bold", size = 7.0)) +
+    #change size and style of text in columns 
+    theme(legend.title = element_blank()) +
+    # 
+    theme(axis.ticks.x = element_blank()) +
+    facet_wrap(~ Var, nrow = 1) +
+    theme(axis.text.x=element_blank()) +
+    #ylim(-3, 3) +
+    stat_summary(fun.data = mean_se, geom = "errorbar")
+   
+
+#need to fix the wrap here and also set up parameters for the width/ height
+
+total.boxplot.facet2
+
+ggsave("High_Quality_boxplot_errorbars.pdf", plot = total.boxplot.facet2, units="in", width= 6, height=5, dpi=400)
+#ggsave("High_Quality_boxplot_errorbars.tiff", plot = total.boxplot.facet2, units="in", width= 6, height=5, dpi=400, compression = 'lzw')
+
+
+```
+
+```{r}
+
+#this was done to calculate the specific differences between the groups for ONE specific metabolite and to visualize it
+
+status <- as.data.frame(norm.data$status)
+
+single.metabolite <- as.data.frame(norm.data$Choline)
+#change the specific metabolite here
+
+combined.data <- cbind(status, single.metabolite)
+
+names(combined.data)[names(combined.data) == "norm.data$status"] <- "Capture"
+names(combined.data)[names(combined.data) == "norm.data$Urea"] <- "Metabolite"
+
+example_metab <-aggregate(combined.data[, 2], list(combined.data$Capture), mean)
+#above code will show specific metabolite
+example_metab
+
+is.num <- sapply(example_metab, is.numeric)
+example_metab[is.num] <- lapply(example_metab[is.num], round, 3)
+
+
+#creates ggplot2 objects
+FC_barplot <- ggplot(data=example_metab, aes(x=Group.1, y=x, fill = Group.1)) +
+                geom_bar (stat = "identity") +
+                geom_text(aes(label=x), vjust=-0.3, size=3.5)+
+                theme_minimal() +
+                ggtitle("Mean INSERT_METABOLITE_CHOICE_HERE Fold Change Here") +
+                ylab("Fold Change (FC)") + 
+                xlab("Adjusted p value (FDR) cutoff (p<0.05)") +
+                theme(text = element_text(face = "bold", size = 4.0)) +
+                scale_fill_manual(values=c("#1B9E77", "#7570B3", "#D95F02"))+
+                #Manually changes the color of the variables 
+                #https://www.rapidtables.com/web/color/RGB_Color.html
+                #see above website for good tool to find color
+                theme(legend.title = element_blank()) +
+                #deletes legend title
+                theme(legend.position='none') +
+                # deletes entire legend
+                theme(axis.text=element_text(size=10), axis.title=element_text(size=14,face="bold")) +
+                #changes the size of axis text (first), and then size of axis labels (second)
+                #theme(legend.background = element_rect(fill= NULL, size=0.5, linetype="solid", colour ="black")) +
+                #creates box around legend 
+                #facet wraps --> set number of rows here also specifies the width of the facets
+                theme(plot.title = element_text(size=22)) 
+                #change sizew of title
+                #ylim(-2, 2)
+                #changes y limits for size 
+            FC_barplot
+            
+            
+ggsave("Glycerol_Single_Metabolite_ANOVA.pdf", plot = FC_barplot, units="in", width= 6, height=5, dpi=1000)
+            
+#ggsave("Glycerol_Single_Metabolite_ANOVA.tiff", plot = FC_barplot, units="in", width= 6, height=5, dpi=1000, compression = 'lzw')
+
+            
+
+            
+
+```
+
+\`\`\`
