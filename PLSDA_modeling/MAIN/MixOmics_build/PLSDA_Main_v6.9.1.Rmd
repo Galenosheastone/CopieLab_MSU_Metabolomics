@@ -1,0 +1,756 @@
+---
+title: "PLSDA_Main_v5.9_MixOmics_build"
+author: "Galen O'Shea-Stone"
+date: "8/19/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+https://mixomicsteam.github.io/Bookdown/plsda.html
+
+```{r}
+library(MetaboAnalystR)
+library(tidyverse)
+library(rpca)
+#library(caret)
+#library(DiscriMiner)
+library(ggthemes)
+library(mixOmics)
+library(ggrepel)
+library(gt)
+library(plotly)
+library(ggpubr)
+#library(MVN)
+
+#initalizes all the libraries needed 
+```
+
+library(doParallel) 
+rCluster <- makePSOCKcluster(6)
+registerDoParallel(rCluster)
+#initates parallel processing 
+
+```{r, echo = FALSE, include=FALSE}
+## This chunk reads in raw .csv performs scaling, normalization and log transform then outputs all the data back into the working directory
+{mSet <- InitDataObjects("conc", "stat", paired = FALSE)
+mSet <- Read.TextData(mSet, "EXAMPLE_DATA.csv", "rowu", "disc")
+###INSERT YOUR DATA FILE NAME HERE###
+#change from rowu to colu for column data vs row  
+#rowp vs colp for paired analysis 
+
+#Perform data processing
+mSet <- SanityCheckData(mSet)
+mSet <- ReplaceMin(mSet);
+mSet <- PreparePrenormData(mSet)
+mSet <- Normalization(mSet, "none", "LogNorm", "AutoNorm", ref= NULL, ratio = FALSE, ratioNum = 20)
+#change your parameters above
+#especially important to change SumNorm --> none if pre-normalized to protein/ cell number etc. 
+mSet <- PlotNormSummary(mSet, "norm_O_", "png",72, width = NA)
+mSet <- PlotSampleNormSummary(mSet, "snorm_O_", "png",72, width = NA)
+mSet <-SaveTransformedData(mSet)
+}
+
+#after this is done, there will be  new files in the working directory 
+#important one moving forward is titled data_normalized.csv
+
+```
+
+```{r}
+
+m.data.all <- read.csv("data_normalized.csv")
+
+###This chunk does all the analysis of the PLSDA model, the PCA analysis and Random forest###
+
+m.data.all <- read.csv("data_normalized.csv")
+m.data.all <- m.data.all[-c(1)]
+#reads in all data and gets rid of the X comumn (sample ID)
+
+m.data.groups <- read.csv("data_normalized.csv")
+m.data.groups <- as.data.frame(m.data.groups$Label)
+#creates a specific column which is just the treatment group
+
+names(m.data.groups)[names(m.data.groups) == "m.data.groups$Label"] <- "Label"
+#changes column name to Label (just to tidy up)
+
+
+#m.data.groups$Label <- m.data.groups$Label %>% recode(`0`= "VARIABLE_A_HERE", `1`="VARIABLE_B_HERE")
+#changes 0 and 1 (separation between paired treatments to whatever is above)...this is for the paired analysis
+###MAKE SURE TO CHANGE VARIABLE NAMES HERE###
+
+m.data.groups <- as.factor(m.data.groups$Label)
+#creates group data as factor with only groups w/ treatment type
+
+{m.data <- read.csv("data_normalized.csv")
+m.data <- as.data.frame(m.data)
+m.data <- m.data[-c(1:2)]
+}
+
+X <- as.matrix(m.data)
+#creates matrix of the data without labels
+#creates vector with only numerical matrix
+X <- X * -1
+#still needed to match metaboanalyst as of 10/14/20
+Y <- as.factor(m.data.groups)  
+#creates factor vector with group separation
+
+set.seed(0666)
+#for reproducibility
+
+## PLS-DA function
+plsda.res <- plsda(X, Y, ncomp = 5, max.iter = 100)
+# where ncomp is the number of components wanted
+#IF YOU NEED TO CHANGE THE COMPONENTS in ROC PLOT, change here
+#computes PLS-DA model using MixOmics package 
+#mode = What type of algorithm to use, (partially) matching one of "regression", "canonical", "invariant" or "classic". See Details.
+#If mode = "X" becomes an issue this is due to the version of mixOmics works with v6.17.26 so either install this version from bioconductor or delete mode = "x" option
+
+
+# this code takes ~ 1 min to run or sometimes longer depending on your processor speed 
+
+cim(plsda.res, comp=1, title ="Component 1", save = "pdf", name.save = "cim_PLSDA", transpose = TRUE)
+
+set.seed(0666) 
+# for reproducibility here, only when the `cpus' argument is not used
+perf.plsda <- perf(plsda.res, validation = c("Mfold"), folds = 5, progressBar = TRUE, auc = TRUE, nrepeat = 10, dist = c("mahalanobis.dist")) 
+                   #can also use "loo" validation and dist = c("all", "max.dist", "centroids.dist", "mahalanobis.dist"),
+
+# perf.plsda.srbct$error.rate  --> error rates? idk wtf this is here for
+
+perf.plsda
+plot(perf.plsda, col = color.mixo(1), sd = TRUE, legend.position = "horizontal") 
+#will need to adjust the col = color.mixo(1) to color.mixo(1:3) for multiple colors
+
+PLSDA.plot <- plotIndiv(plsda.res, ind.names = FALSE, legend=TRUE,
+          ellipse = TRUE, star = FALSE, title = "PLSDA CHECK",
+          )
+
+auc.plsda <- auroc(plsda.res)
+#plots the ROC curve, this is used later to save it to the working directory
+
+AUROC.fig <- auc.plsda$graph.Comp5
+#creates data for AUROC fig
+#need to change the graph.CompX <-- to whatever the number of final components you want to show
+
+AUROC.fig <- AUROC.fig + theme(legend.position="bottom") 
+#changes the position of the legend 
+
+#AUROC.fig <- ggplot_build(AUROC.fig)
+#trying to get change the plot colors...development
+AUROC.fig
+
+ggsave("AUROC_HERE.pdf", plot = AUROC.fig, units="in", width= 8, height=10, dpi=1000)
+#saves AUROC pdf to working dir 
+
+
+contrib.metabs <- plotLoadings(plsda.res, comp = 1, contrib = 'max', method = 'median', 
+                               legend.title = "Capture", ndisplay = 100, size.legend = 1, 
+                               title = "Importance to Component 1", size.title = 1.0
+                                )
+#change the desired component here i.e. comp = 1, 2 ,3 etc
+
+#This function provides a horizontal bar plot to vizualise loading vectors. For discriminant analysis, it provides vizualisation of highest or lowest mean/median value of the variables with color code corresponding to the outcome of interest.
+
+
+###FOR 3D PLSDA SEE BELOW!!!!####
+#plotIndiv(plsda.res, style="3d")
+#use this to create a 3D PLSDA
+
+#spls.res <- splsda(X, Y, ncomp = 5, max.iter = 100)
+
+#val <- perf(spls.res, criterion = c("all"), folds = 5)
+#val
+#plot(val)
+#this is all for running SPLSDA 
+
+
+```
+
+
+#this is for validation metrics and VIP scores tables 
+
+Y.mat <- unmap(Y)
+res <- pls(X, Y.mat)
+val <- perf(res, validation = "loo", criterion = c("R2", "Q2"))
+val
+
+plot(val$R2)
+val$Q2
+val$R2
+val$Q2.total
+##VALIDATION METRICS --OTHER these will out put Q2, R2 and total Q2 walues 
+
+```{r}
+
+#BELOW ARE ALL PLSDA METRICS
+plsda.metrics <- perf(plsda.res,
+          dist = c("all", "max.dist", "centroids.dist", "mahalanobis.dist"),
+          validation = c("Mfold", "loo"),
+          folds = 10, nrepeat =1, auc = TRUE, progressBar = TRUE)
+
+plsda.metrics$error.rate.all
+#use this to find wherer the BER (balanced error rate and the max distance are the lowest )
+
+plsda.metrics$auc.all
+plsda.metrics$auc
+#gives you area under the curve values (AUC) for the models clkassification ability
+
+
+#use this to find wherer the BER (balanced error rate and the max distance are the lowest )
+```
+
+
+
+
+```{r}
+
+set.seed(0666) # for reproducbility in this vignette, otherwise increase nrepeat
+MyPerf.plsda <- perf(plsda.res, validation = "Mfold", folds = 5, 
+                  progressBar = TRUE, nrepeat = 10, criterion = c("R2", "Q2")) 
+# we suggest nrepeat = 50...changed to 10 to reduce computational time
+#can chamnge validation to "loo" if needed (leave one out)
+
+metrics.PLSDA <- plot(MyPerf.plsda, col = color.mixo(5:7), sd = TRUE, legend.position = "vertical")
+
+plsda.test <- plsda.res$variates
+
+plsda.data <- (plsda.test$X)
+#pulls the scores data from the plsda model 
+
+plsda.data <- as.data.frame(plsda.data)
+#changes into dataframe for ggplot 
+
+m.data.groups <- as.data.frame(m.data.groups)
+#changes groups back into dataframe instead of matrix 
+
+new.plsda.data <- cbind(plsda.data, m.data.groups)
+#combines the groups with the plsda components data 
+
+names(new.plsda.data)[names(new.plsda.data) == "m.data.groups"] <- "Group"
+#changes column name to Label (just to tidy up)
+
+comp.var <- as.data.frame(plsda.res$prop_expl_var$X)
+#pulls out the explained variances for the selected components 
+comp.var <- as.data.frame(t(comp.var))
+#transposes the dataframe for referencing 
+
+comp1.var <- comp.var$`comp1`
+comp2.var <- comp.var$`comp2`
+comp3.var <- comp.var$`comp3`
+
+##BELOW WILL BE THE VARIENCES FOR COMP 1 & 2##
+comp1.var
+#component 1 variance 
+comp2.var
+#component 2 variance 
+comp1.var <- comp1.var *100
+comp2.var <- comp2.var *100
+comp3.var <- comp3.var *100
+
+#multiplies both by 100 for %
+comp1.var <- signif(comp1.var, 3)
+comp2.var <- signif(comp2.var, 3)
+comp3.var <- signif(comp3.var, 3)
+
+print("Above are the variences for component 1 (top) and component 2 (bottom)")
+#see the end of chunk
+
+plsda.plot <- ggplot(new.plsda.data, aes(x= comp1, y= comp2, color = Group)) +
+              geom_jitter(size = 1.6, shape = 19, fill = "black", stroke = 0.5, aes(color = Group)) + 
+              theme_bw() +
+              #changes the theme of the plot 
+              ggtitle("INSERT_TITLE_HERE") +
+              ###MAKE SURE TO INSERT TITLE HERE
+              xlab(paste("Component 1:", comp1.var, "%"))+
+              ylab(paste("Component 2:", comp2.var, "%")) +
+              #inserts variance for specific components  
+              theme(axis.text=element_text(size=14),
+              axis.title=element_text(size=16,face="bold")) + 
+              #use this to change the size of the axis labels 
+              scale_color_manual(name="Variety", values=c("black","orange", "skyblue", " mediumslateblue")) +
+              #changes the color nanually and easier than below using scale_color_hue
+              stat_ellipse(type = "t", geom = "polygon", alpha = 1/4, aes(fill = Group), show.legend = FALSE) + 
+              scale_fill_manual(values=c("black","orange", "skyblue", "mediumslateblue")) 
+              #geom_text(label = m.data)
+#you will need to  add the amount of variance for each sample manually...get this from MA code? --> ...work in progress
+#plsda.plot
+
+#you will need to  add the amount of variance for each sample manually...get this from MA code? --> ...work in progress
+#plsda.plot
+  
+plsda.plot <- plsda.plot + stat_ellipse(type = "t") 
+#sets the confidence interval type (norm = 95%) --> this can be customized(see below)
+#The default "t" assumes a multivariate t-distribution, and "norm" assumes a multivariate normal distribution. "euclid" draws a circle with the radius equal to level, representing the euclidean distance from the center. This ellipse probably won't appear circular unless coord_fixed() is applied.
+#plsda.plot <- plsda.plot + scale_color_brewer(palette="dark2")
+#uses scale color brewer to set colors
+
+#plsda.plot <- plsda.plot + scale_color_hue(l=70, c=90)
+#The lightness (l) and the chroma (c, intensity of color) of the default 
+#(hue) colors can be modified using the functions scale_hue 
+
+
+###OR###
+
+#insert this for color
+#scale_color_manual(name="Variety", values=c("springgreen2", "firebrick2")) 
+#change colors manually using R names 
+  
+#Insert code to change the title here if needed 
+
+plsda.plot <- plsda.plot + theme(plot.title = element_text( face = "bold", color = "black", size = NA))
+
+
+#below is options for the legend of the PLSDA plot
+plsda.plot <- plsda.plot +
+  theme(legend.position="right") +
+              theme(legend.title = element_text(colour="Black", size=10, face="plain")) +
+              theme(legend.text = element_text(colour="black", size=10, face="plain")) +
+              #theme(legend.background = element_rect(fill="lightblue", size=0.5, linetype="solid", colour ="darkblue")) +
+              #creates box around legend 
+              theme(legend.title = element_blank()) +
+              #removes plot legend title
+              theme(legend.position='bottom') 
+              #removes entire legend or changes the location of legend ("left", "right", "bottom" etc... )
+              #scale_x_reverse()
+              #this is needed to flip x axis to match metaboanalyst as of 10/14/20 ...sometimes...
+              #double check that this is needed and turn off or on as needed
+
+
+plsda.plot <- plsda.plot + scale_x_reverse()
+#needed to match metaboanalyst x axis as of 3/17/21... turn off to flip back if needed
+
+plsda.plot <- plsda.plot + scale_y_reverse()
+#put in to match MA code 8/19/21
+
+
+
+plsda.plot
+#shows the plot for pre-editing
+
+
+#Saves ROC and PLSDA to working directory 
+
+{png(filename = "PLSDA_ROC_Plot_here.png",
+    width = 500, height = 500, units = "px", pointsize = 12,
+     bg = "white",  res = NA)
+auroc(plsda.res)
+dev.off()
+}
+#work on plotting the ROC better in later builds
+
+
+error.rate.here <-as.data.frame(MyPerf.plsda$error.rate)
+error.rate.here <- signif(error.rate.here, 2)
+write.csv(error.rate.here, file = "CER_Table_here.csv", sep = ",")
+#Writes a file containing the error rate (both overall error and BER)
+
+
+{png(filename = "PLSDA_CER_PLOT_HERE.png",
+    width = 500, height = 500, units = "px", pointsize = 12,
+     bg = "white",  res = NA)
+plot(MyPerf.plsda, col = color.mixo(5:7), sd = TRUE, legend.position = "vertical")
+dev.off()
+}
+
+ggsave("High_Quality_PLSDA.pdf", plot = plsda.plot, units="in", width= 12, height=10, dpi=5000)
+#turn this off if you don't want a pdf version
+
+explained.var <- sum(plsda.res$explained_variance$X)
+message("This is the explained varience for X components ", explained.var)
+#calculates the amount of varience explained by the number of components selected 
+
+
+#ggsave("High_Quality_PLSDA.tiff", plot = plsda.plot, units="in", width= 6, height=5, dpi=400, compression = 'lzw')
+#creates a high quality file of the PLSDA plot in the working dir 
+#use the above code to make journal quality files
+
+
+########NOTE THAT IF YOUR ROC CURVE SHOWS ROC<.5 DO NOT USE!!!
+#IF YOU DO NOT SEE A PLS-DA SCATTERPLOT --> THE MODEL IS NOT PREDICTIVE AND YOU SHOULD NOT USE PLS-DA!!!!################
+#this might not be relavent using the MixOmics build
+
+#if you get a null 1, can't shut off device or dev.off() error try restarting R 
+# or use the code line below?  
+# while (!is.null(dev.list()))  dev.off()
+
+
+
+
+##NOTE that if you're interested in ROC for specific components see below##
+
+get_legend(plsda.plot, position = "right")
+
+leg <- get_legend(plsda.plot)
+leg <- as_ggplot(leg)
+
+ggsave("Legend_here.pdf", plot = leg, units = "in", width= 10, height= 10, dpi= 2000 )
+
+#This is used to pull out just the legend of the plot for final figure creation if needeed--> will be a seperate pdf in folder
+
+
+
+
+
+#MV_outlier_result <- mvn(data = plsda.data, mvnTest = "hz", 
+              #multivariateOutlierMethod = "quan", desc = TRUE, R = 2000)
+#above code outlier detection methods which are based on robust Mahalanobis distances (rMD(x)). Mahalanobis distance is a metric which calculates how far each observation is to the center of joint distribution, which can be thought of as the centroid in multivariate space. Robust distances are estimated from minimum covariance determinant estimators rather than the sample covariance
+#done using the 'mvn' package 
+
+
+```
+Note, PLS-DA maximizes the covariance between X (data) and Y (group). The variance displayed in the plot above is the explained variance for X. Covariance and x-variance may not agree with each other in some cases. For instance, the 1st component may not explain more X-variance than the 2nd component.
+
+```{r}
+###This chunk does visualization of the loading plot for the PLSDA model
+
+graph.loadings <- (plsda.res$loadings$X)
+#this gets the scores data and creates a matrix with the main Principal components
+
+graph.loadings <-as.data.frame(graph.loadings)
+
+
+  #you can change this here to fit your grouping variable for the plot
+{names(graph.loadings)[1] <- "Loadings1"
+#these correspond to components 1,2,3,4 etc...
+names(graph.loadings)[2] <- "Loadings2"
+names(graph.loadings)[3] <- "Loadings3"
+names(graph.loadings)[4] <- "Loadings4"
+}
+
+graph.loadings$`Metabolite` <- rownames(graph.loadings)
+#pulls out metabolite names
+
+plsda.loadings.plot <- ggplot(graph.loadings, aes(x= Loadings1, y= Loadings2)) +
+  #you can change the components represented by changing the x and y above
+              geom_jitter(size = 1.0, shape = 21, fill = "blue") + 
+              theme_bw() +
+              #changes the theme of the plot 
+              ggtitle("PLS-DA Loadings Plot") +
+              xlab("Loadings 1") +
+              ylab("Loadings 2 ") +
+              geom_text_repel(aes(x= Loadings1, y=Loadings2, label = Metabolite), size = 3, force = 2)
+              #forces the text to repel and options with that
+  
+plsda.loadings.plot
+
+ggsave("HQ_PLSDA_Loadings.pdf", plot = plsda.loadings.plot, units="in", width= 6, height=5, dpi=400)
+#ggsave("HQ_PLSDA_Loadings.tiff", plot = plsda.loadings.plot, units="in", width= 6, height=5, dpi=400, compression = 'lzw')
+
+#below does the VIP scores plotting
+vip.scores <- vip(plsda.res)
+
+vip.scores <- as.data.frame(vip.scores)
+#vip.significant <- vip.scores[order(vip.scores$comp1), ]
+#orders the VIP scores 
+
+vip.significant <- subset(vip.scores, comp1 >= 1.2, select=c(comp1))
+
+#INSERT ggplot 
+
+vip.significant$`Metabolite` <- rownames(vip.significant)
+
+theme_set(theme_bw())
+
+vip.bar <- ggplot(vip.significant, aes(x=Metabolite, y=comp1)) + 
+            geom_bar(stat="identity", width=.5, fill="tomato3") + 
+              labs(title="Variable Importance in Projection", 
+                   subtitle="VIP >1.2", 
+                   caption="caption") + 
+               ylab("VIP Score") +
+               theme(axis.text.x = element_text(angle=65, vjust=0.6))
+vip.bar
+
+vip.significant$comp1 <- round(vip.significant$comp1, 1)
+#changes the number of digits 
+
+
+vip.lollipop <- ggplot(vip.significant, aes(x= reorder(Metabolite, comp1), y=comp1, label=comp1)) + 
+                      geom_point(size=6)  +
+                      geom_segment(aes(y = 0, 
+                                       x = Metabolite, 
+                                       yend = comp1, 
+                                       xend = Metabolite), 
+                                   color = "black") +
+                      geom_text(color="white", size=3) +
+                       labs(title="Variable Importance in Projection", 
+       subtitle="Componment 1: (VIP)≥1.2", 
+       caption="") + 
+    ylab("VIP Score") +
+    xlab(NULL) +
+    geom_hline(yintercept = 1.2, color = "red2", linetype = "dashed") +
+  theme(axis.text.x = element_text(angle=65, vjust=0.6))
+
+vip.lollipop
+
+
+vip.lollipop.flip <- vip.lollipop + coord_flip()
+vip.lollipop.flip
+
+
+
+ggsave("VIP_LOLLIPOP_NORM_HERE.pdf", plot = vip.lollipop, units="in", width= 6, height=5, dpi=1000)
+ggsave("VIP_LOLLIPOP_HORIZ_HERE.pdf", plot = vip.lollipop.flip, units="in", width= 6, height=8, dpi=2000)
+#ggsave("VIP_LOLLIPOP_HERE.tiff", plot = vip.lollipop, units="in", width= 6, height=5, dpi=1000, compression = 'lzw')
+
+```
+
+```{r}
+
+##this chunk will take the data of the importance created in the PLSDA model and visualizes
+#provides a horizontal bar plot to visualize loading vectors. For discriminant analysis, it provides visualization of highest or lowest mean/median value of the variables with color code corresponding to the outcome of interest.
+
+#This set of visualizations  provides a horizontal bar plot to visualize loading vectors. For discriminant analysis, it provides visualization of highest or lowest mean/median value of the variables with color code corresponding to the outcome of interest.
+
+#The contribution of each variable for each component (depending on the object) is represented in a barplot where each bar length corresponds to the loading weight (importance) of the feature. The loading weight can be positive or negative.
+
+contrib.metabs <- plotLoadings(plsda.res, comp = 1, contrib = 'max', method = 'median', legend.title = "Capture", ndisplay = 100, size.legend = 1, title = "Importance to Component 1", size.title = 1.0)
+#change the desired component here#loads the data as a dataframe using plotLoading function from MixOmics
+contrib.metabs$`Metabolite` <- rownames(contrib.metabs)
+#makes a new row called "Metabolite"
+#Pulls the names of metabolites out of the 0 column (there is another name for this column...)
+contrib.metabs <- contrib.metabs[order(contrib.metabs$importance), ]
+#sorts them
+contrib.metabs$Metabolite <- factor(contrib.metabs$Metabolite, levels = contrib.metabs$Metabolite)
+# convert to factor to retain sorted order in plot.
+contrib.metabs$importance <- round(contrib.metabs$importance, 2)
+#this is needed to simplify the amount of decimals for the later plots
+theme_set(theme_bw())
+contrib.metab.fig <- ggplot(contrib.metabs, aes(x=Metabolite, y=importance, label=NA)) + 
+                      geom_bar(stat='identity', aes(fill=GroupContrib), width=.5)  +
+                      scale_fill_manual(name="Importance", 
+                                        labels = c("VARIABLE_1", "VARIABLE_2", "VARIABLE_3", "VARIABLE_4"), 
+                                        #change these manually--from new.plsda.data 
+                                        values = c("black","orange", "skyblue", " mediumslateblue")) + 
+                      labs(subtitle="", 
+                           title= "LAbel_here") +
+                        ylab("Importance") +
+                      coord_flip()
+#creates diverging bars plot
+contrib.metab.fig
+
+contrib.metab.fig.comp1 <- ggplot(contrib.metabs, aes(x=Metabolite, y=importance, label=importance)) + 
+                      geom_point(stat='identity', aes(col=GroupContrib), size=3)  +
+                      scale_color_manual(name="", 
+                                         labels = c("VARIABLE_1", "VARIABLE_2", "VARIABLE_3", "VARIABLE_4"),
+                                         #change these manually 
+                                         values = c("black","orange", "skyblue", " mediumslateblue")) + 
+                      #geom_text(color="white", size=2) +
+                      labs(title="PLS-DA Metabolite Importance: Component 1", 
+                           #make sure to adjust this above! 
+                           subtitle="") + 
+                        ylab("Importance") +
+                      coord_flip()
+#creates diverging dotplot chart
+contrib.metab.fig.comp1
+
+####COMPONENT 2 BELOW###########
+contrib.metabs2 <- plotLoadings(plsda.res, comp = 2, contrib = 'max', method = 'median', legend.title = "Capture", ndisplay = 100, size.legend = 1, title = "Importance to Component 2", size.title = 1.0)
+#change the desired component here#loads the data as a dataframe using plotLoading function from MixOmics
+contrib.metabs2$`Metabolite` <- rownames(contrib.metabs2)
+#makes a new row called "Metabolite"
+#Pulls the names of metabolites out of the 0 column (there is another name for this column...)
+contrib.metabs2 <- contrib.metabs2[order(contrib.metabs2$importance), ]
+#sorts them
+contrib.metabs2$Metabolite <- factor(contrib.metabs2$Metabolite, levels = contrib.metabs2$Metabolite)
+# convert to factor to retain sorted order in plot.
+contrib.metabs2$importance <- round(contrib.metabs2$importance, 2)
+#this is needed to simplify the amount of decimals for the later plots
+contrib.metab.fig.comp2 <- ggplot(contrib.metabs2, aes(x=Metabolite, y=importance, label=importance)) + 
+                      geom_point(stat='identity', aes(col=GroupContrib), size=3)  +
+                      scale_color_manual(name="", 
+                                         labels = c("VARIABLE_1", "VARIABLE_2", "VARIABLE_3", "VARIABLE_4"),
+                                         #change these manually 
+                                         values = c("black","orange", "skyblue", " mediumslateblue")) + 
+                      #geom_text(color="white", size=2) +
+                      labs(title="PLS-DA Metabolite Importance: Component 2", 
+                           #make sure to adjust this above! 
+                           subtitle="") + 
+                        ylab("Importance") +
+                      coord_flip()
+#creates diverging dotplot chart
+contrib.metab.fig.comp2
+
+####COMPONENT 3 BELOW###########
+contrib.metabs3 <- plotLoadings(plsda.res, comp = 3, contrib = 'max', method = 'median', legend.title = "Capture", ndisplay = 100, size.legend = 1, title = "Importance to Component 3", size.title = 1.0)
+#change the desired component here#loads the data as a dataframe using plotLoading function from MixOmics
+contrib.metabs3$`Metabolite` <- rownames(contrib.metabs3)
+#makes a new row called "Metabolite"
+#Pulls the names of metabolites out of the 0 column (there is another name for this column...)
+contrib.metabs3 <- contrib.metabs3[order(contrib.metabs3$importance), ]
+#sorts them
+contrib.metabs3$Metabolite <- factor(contrib.metabs3$Metabolite, levels = contrib.metabs3$Metabolite)
+# convert to factor to retain sorted order in plot.
+contrib.metabs3$importance <- round(contrib.metabs3$importance, 2)
+#this is needed to simplify the amount of decimals for the later plots
+contrib.metab.fig.comp3 <- ggplot(contrib.metabs3, aes(x=Metabolite, y=importance, label=importance)) + 
+                      geom_point(stat='identity', aes(col=GroupContrib), size=3)  +
+                      scale_color_manual(name="", 
+                                         labels = c("VARIABLE_1", "VARIABLE_2", "VARIABLE_3", "VARIABLE_4"),
+                                         #change these manually 
+                                         values = c("black","orange", "skyblue", " mediumslateblue")) + 
+                      #geom_text(color="white", size=2) +
+                      labs(title="PLS-DA Metabolite Importance: Component 3", 
+                           #make sure to adjust this above! 
+                           subtitle="") + 
+                        ylab("Importance") +
+                      coord_flip()
+#creates diverging dotplot chart
+contrib.metab.fig.comp3
+
+
+#NOT THAT IF THERE IS EVER AN EXTRA "VARIABLE 1/2/3/4 etc. then it is a tie and change the name of that variable
+
+ggsave("Importance.pdf", plot = contrib.metab.fig, units="in", width= 8, height=10, dpi=1000)
+ggsave("Importance_COMP1.pdf", plot = contrib.metab.fig.comp1, units="in", width= 8, height=10, dpi=2000)
+ggsave("Importance_COMP2.pdf", plot = contrib.metab.fig.comp2, units="in", width= 8, height=10, dpi=2000)
+ggsave("Importance_COMP3.pdf", plot = contrib.metab.fig.comp3, units="in", width= 8, height=10, dpi=2000)
+#create .pdf files in the working directory 
+
+#ggsave("Importance.tiff", plot = contrib.metab.fig, units="in", width= 6, height=7, dpi=1000, compression = 'lzw')
+#ggsave("Importance_COMP1.tiff", plot = contrib.metab.fig.comp1, units="in", width= 6, height=8, dpi=1000, compression = 'lzw')
+#ggsave("Importance_COMP2.tiff", plot = contrib.metab.fig.comp2, units="in", width= 6, height=8, dpi=1000, compression = 'lzw')
+#ggsave("Importance_COMP3.tiff", plot = contrib.metab.fig.comp3, units="in", width= 6, height=8, dpi=1000, compression = 'lzw')
+#create .tiff files in the working directory 
+
+```
+
+```{r}
+#3D PLSDA DEVELOPMENT CHUNK
+
+PCA.data.3D <- as.factor(new.plsda.data$Group)
+
+
+comp1.var
+comp2.var
+comp3.var
+
+PC1.X <- new.plsda.data$PC1
+PC2.Y <- new.plsda.data$PC2
+PC3.Z <- new.plsda.data$PC3
+
+
+
+fig <- plot_ly(new.plsda.data, x = ~comp1, y = ~comp2, z = ~comp3, color = ~Group, 
+               colors = c("darkorchid2","darkorange","springgreen2"))
+               marker = list(color = ~PC1, colorscale = c('#FFE1A1', '#683531'), showscale = TRUE)
+fig <- fig %>% add_markers(marker = list(size = 5,
+                             #color = c("darkorchid2","darkorange"),
+                             line = list(color = c ("blue4","black"),
+                                         width = 1)))
+fig <- fig %>% layout(title = "INSERT_TITLE_HERE", plot_bgcolor = "#e5ecf6")
+fig <- fig %>% layout(scene = list(xaxis = list(title = "PC 1: INSERT_COMP1.var_HERE%"),
+                     yaxis = list(title = "PC 2: INSERT_COMP2.var_HERE%"),
+                     zaxis = list(title = "PC 3: INSERT_COMP3.var_HERE%")))
+fig
+
+
+
+
+```
+
+
+
+#USE BELOW CODE to create a 3D interactive PLSDA plot INCLUDING confidence intervals (if needed--not as good as above)
+#```{r}
+
+plotIndiv(plsda.res, 
+          group = Y, 
+          #ind.names = ,
+          legend =TRUE, 
+          ellipse = TRUE, 
+          rep.space = 'XY-variate',
+          title = '3D-PLSDA',
+          star = FALSE, 
+          centroid = FALSE,
+          style='3d')
+library('rgl')
+rgl.snapshot('3dplot.png', fmt = 'png')
+#to save the exact image in the rgl plot
+
+#```
+
+
+```{r}
+#
+#MV_outlier_result <- mvn(data = plsda.data, mvnTest = "hz",multivariateOutlierMethod = "quan", desc = TRUE, R = 2000, multivariatePlot = "qq")
+#above code calculates multivariate normality and creates a QQplot showing potential outliers using the 'MVN" package
+#see below for details on website
+#https://cran.r-project.org/web/packages/MVN/vignettes/MVN.html#110_Multivariate_outliers
+
+
+```
+
+
+
+
+
+
+VIP SCORES TABLE BELOW!!
+
+
+```{r}
+
+##This creates a table with the VIP scores for the top 5 components as an excel file 
+
+vip.view <-vip(plsda.res)
+vip.view
+#pulls out VIP scores in a table for the top 5 components  
+vip.table <- as.data.frame(vip.view)
+#changes to dataframe
+vip.table <- vip.table[with(vip.table,order(-comp1)), ]
+#reorganizes as descending values based on comp1 
+vip.table
+#look at table
+write.csv(vip.table,"VIP_table.csv", row.names = TRUE)
+# as excel file for export
+
+vip.table <- cbind(Metabolite = rownames(vip.table), vip.table)
+#changes row names  to column 1 
+
+
+
+###SOMETIMES THE VIP TABLE comp1 =component 1... GETS REVERSED USE ONE OF THE TWO CHANGES TO GET IT TO WORK 
+
+#vip.table <- rename (vip.table, c("comp1" = "Component 1", "comp2" = "Component 2", "comp3" = "Component 3","comp4" = "Component 4","comp5" = "Component 5" ))
+#vip.table
+
+vip.table <- rename (vip.table, c("Component 1" = "comp1", "Component 2" = "comp2", "Component 3" = "comp3", "Component 4" = "comp4", "Component 5" = "comp5" ))
+vip.table
+
+###
+
+VIP.gt.table <- gt(vip.table)
+#creates gt object
+VIP.gt.table <- 
+  VIP.gt.table %>%
+  tab_header(
+    title = md("PLS-DA VIP Scores"),
+    subtitle = ""
+  ) 
+#adds title to VIP table
+VIP.gt.table
+
+gtsave(VIP.gt.table, "VIP_TABLE_HERE.pdf")
+#saves VIP table to working dir 
+
+
+```
+
+```{r}
+
+#in development
+
+#plsda.biplot <- plsda(X, Y, ncomp = 2)
+
+
+#biplot(plsda.biplot, cutoff = 0.72)
+
+
+```
+
+
+
