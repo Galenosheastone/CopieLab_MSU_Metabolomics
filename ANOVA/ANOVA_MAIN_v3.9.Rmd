@@ -1,0 +1,342 @@
+---
+title: "ANOVA_Main_version"
+author: "Galen O'Shea-Stone"
+date: "8/26/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(MetaboAnalystR)
+library(tidyverse)
+#library(reshape)
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+library(ggthemes)
+library(dplyr)
+#library(hrbrthemes)
+#library(viridis)
+#library(data.table)
+library(plyr)
+library(caret)
+library(gplots)
+library(ggsignif)
+library(cowplot)
+#library(ggpubr)
+
+```
+
+```{r, echo = FALSE, include=FALSE}
+## This chunk reads in raw .csv performs scaling, normalization and log transform then outputs all the data back into the working directory
+mSet <- InitDataObjects("conc", "stat", paired = FALSE)
+mSet <- Read.TextData(mSet, "EXAMPLE_DATA.csv", "rowu", "disc")
+#change from rowu to colu for column data vs row 
+#rowp vs colp for paired analysis 
+
+#Perform data processing
+mSet <- SanityCheckData(mSet)
+mSet <- ReplaceMin(mSet);
+mSet <- PreparePrenormData(mSet)
+mSet <- Normalization(mSet, "none", "LogNorm", "AutoNorm", ref= NULL, ratio = FALSE, ratioNum = 20)
+mSet <- PlotNormSummary(mSet, "norm_O_", "png",72, width = NA)
+mSet <- PlotSampleNormSummary(mSet, "snorm_O_", "png",72, width = NA)
+mSet <-SaveTransformedData(mSet)
+
+
+#after this is done, there will be a new files in the working directory 
+#important one moving forward is titled data_normalized.csv
+```
+
+
+```{r}
+mSet.1 <- ANOVA.Anal(mSet, nonpar = FALSE, thresh = 0.05, post.hoc = "tukey", all_results = FALSE)
+#preforms ANOVA, change parameters above       
+#see note below about non-parametric tests
+
+#mSet.1
+
+ANOVA.data <- read.csv("anova_posthoc.csv", sep=",")
+#note: if doing non-parametric then need to change line above to "kw_posthoc.csv"
+
+
+
+norm.data <- mSet$dataSet$norm
+#extract the normalized data from the large list created in the preprocessing
+
+status <- mSet$dataSet$cls
+
+
+x <-  mSet$dataSet$norm
+norm.data <- add_column(x, status, .before = T)
+#combines the status set into the data for differentiation 
+
+signif.values <- read.csv("anova_posthoc.csv")
+#gathers list of significant metabolites from volcano analysis
+s.v <- as.factor(signif.values$X)
+#changes this for later use
+```
+```{r}
+
+#this chunk will create the ANOVA plot(s)
+
+###NOTE: occasionally this will cause an error with "s.v" portion. If this happens just clear environment AND restart R 
+#probably  an issue with interaction with another package/environment###
+
+#data$names <- factor(data$names , levels=c("A", "D", "C", "B"))
+#use the above line to re-order the data in how you would like it presented in the bar chart format
+
+total.boxplot.facet <- norm.data %>%
+    select(status , s.v) %>%
+    pivot_longer(., cols = c(s.v), names_to = "Var", values_to = "Val") %>%
+    ggplot(aes(x = Var, y = Val, fill = status)) +
+    geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=0.7, notch = F, notchwidth = 0.1, varwidth = FALSE) +
+    #The notch displays a confidence interval around the median which is normally based on the median +/- 1.58*IQR/sqrt(n).                 Notches are used to compare groups; if the notches of two boxes do not overlap, this is a strong evidence that the medians differ.
+    #geom_jitter(size = 0.1, shape=16, position=position_jitter(0.2)) +
+    #changes color of the fill
+    ggtitle("INSERT_TITLE_HERE") +
+    ylab("") + 
+    xlab("Adjusted p value (FDR) cutoff (p<0.05)") +
+    theme(text = element_text(face = "bold", size = 4.0)) +
+    scale_fill_manual(values=c("#808080", "#E69F00", "#56B4E9","#660000","#6666FF","#0000FF","#000099","#000066"))+
+    #Manually changes the color of the variables 
+    #https://www.rapidtables.com/web/color/RGB_Color.html
+    #see above website for good tool to find color
+    theme_bw() +
+    #manually change the theme of the plot (use google for more ideas)
+    stat_summary(fun = mean, geom="point",colour="red1", size=1, position=position_dodge(width=0.75)) +
+    #change the position_dodge width if the mean points are not aligning correctly with the groups
+    theme(legend.title = element_blank()) +
+    #changes or deletes  legend title size--change too element_text(size = XX)
+    theme(legend.text =  element_text(size = 10)) +
+    #changes legend text size 
+    theme(legend.position='bottom') +
+    # deletes entire legend
+    theme(axis.text=element_text(size=10), axis.title=element_text(size=14,face="bold")) +
+    #changes the size of axis text (first), and then size of axis labels (second)
+    theme(legend.background = element_rect(fill= NULL, size=0.5, linetype="solid", colour ="black")) +
+    #creates box around legend 
+    theme(axis.ticks.x = element_blank()) +
+    facet_wrap(~ Var, nrow = 4,  labeller = labeller(groupwrap = label_wrap_gen(1000)), scales = "free") +
+    #facet wraps --> set number of rows here also specifies the width of the facets
+    theme(axis.text.x=element_blank()) +
+    theme(plot.title = element_text(size=22)) +
+    #change sizew of title
+     theme(strip.text.x = element_text(size = 10, color = "Black", face = "bold")) + 
+    #changes the size of the facet plot titles and changes the font style face = bold.italic is also good
+    ylim(-2.0, 2.0) + 
+    #changes y limits for size 
+    geom_signif()
+#need to fix the wrap here and also set up parameters for the width/ height
+
+
+#my_comparisons <- list(c("Dart","Dropnet"), c("Dropnet","Helo"), c("Dart", "Helo"))
+#old code that is somehow still here -- not really quite sure what waas supossed to be happening here
+
+#total.boxplot.facet <- total.boxplot.facet + stat_compare_means(comparisons = my_comparisons) + # Add pairwise comparisons p-value
+#stat_compare_means(label.y = 50)     # Add global p-value
+
+
+total.boxplot.facet
+
+
+
+
+ggsave("High_Quality_boxplot.pdf", plot = total.boxplot.facet, units="in", width = 20, height = 16, dpi=5000)
+
+#note a 5 row ANOOVA is width= 26 and height 14
+
+#change to .tiff if extra HQ file is needed
+
+#ggsave("High_Quality_boxplot.tiff", plot = total.boxplot.facet, units="in", width = 18, height = 12, dpi=1000, compression = 'lzw')
+#change to .tiff and use compression +'lzw' in ggsave
+
+
+get_legend(total.boxplot.facet, position = "right")
+
+leg <- get_legend(total.boxplot.facet)
+leg <- as_ggplot(leg)
+
+ggsave("Legend_here.pdf", plot = leg, units = "in", width= 10, height= 10, dpi= 2000 )
+#prints just the legend for figure creation if needed
+
+```
+
+
+```{r}
+dodge <- position_dodge(width = 1.0)
+#aligns the boxplots (below) with the violin and can adjust the spacing between the plots 
+
+total.violin <- norm.data %>%
+    select(status , s.v) %>%
+    pivot_longer(., cols = c(s.v), names_to = "Var", values_to = "Val") %>%
+    ggplot(aes(x = Var, y = Val, fill = status)) +
+    geom_violin(trim= FALSE, position = dodge) +
+    #position is set above on line 179...for boxplots to align later 
+    #geom_jitter(size = 1.4) + 
+    #turn on the above to be able to see the jitter overlaid onto the plot
+    scale_fill_manual(values=c("#808080", "#E69F00", "#56B4E9","#660000","#6666FF","#0000FF","#000099","#000066"))+
+    ggtitle("INSERT_TITLE_HERE") +
+    ylab("") + 
+    xlab("Adjusted p value (FDR) cutoff (p<0.05)") +
+    theme_bw() +
+    theme(text = element_text(face = "bold", size = 8.5)) +
+    scale_fill_manual(values=c("#808080", "#E69F00", "#56B4E9","#660000","#6666FF","#0000FF","#000099","#000066"))+
+    #Manually changes the color of the variables 
+    #https://www.rapidtables.com/web/color/RGB_Color.html
+    #see above website for good tool to find color
+    stat_summary(fun = mean, geom="point",colour="red1", size=1, position=position_dodge(width=0.75)) +
+    #change the position_dodge width if the mean points are not aligning correctly with the groups
+    theme(legend.title = element_blank()) +
+    #changes or deletes  legend title size--change too element_text(size = XX)
+    theme(legend.text =  element_text(size = 25)) +
+    #changes legend text size 
+    theme(legend.position='bottom') +
+    # deletes entire legend
+    theme(axis.text=element_text(size=20), axis.title=element_text(size=25,face="bold")) +
+    #changes the size of axis text (first), and then size of axis labels (second)
+    theme(legend.background = element_rect(fill= NULL, size=0.5, linetype="solid", colour ="black")) +
+    #creates box around legend 
+    theme(axis.ticks.x = element_blank()) +
+    facet_wrap(~ Var, nrow = 3,  labeller = labeller(groupwrap = label_wrap_gen(15)), scales = "free") +
+    #facet wraps --> set number of rows here also specifies the width of the facets
+    theme(axis.text.x=element_blank()) +
+    
+    theme(plot.title = element_text(size=30)) +
+    #change sizew of title
+     theme(strip.text.x = element_text(
+        size = 20, color = "Black", face = "bold"
+        )) + 
+    #changes the size of the facet plot titles
+    ylim(-3.5, 3.5)
+    #changes y limits for size 
+
+total.violin <- total.violin + geom_boxplot(width=0.1, position = dodge)
+#adds boxplots inside the violin plots 
+
+
+#total.violin
+
+ggsave("High_Quality_Violin.pdf", plot = total.violin, units="in", width= 28, height= 24, dpi=5000)
+#ggsave("High_Quality_Violin.tiff", plot = total.violin, units="in", width= 6, height=5, dpi=400, compression = 'lzw')
+
+#exports jpeg
+
+
+###CODE AT BOTTOM WILL MAKE SINGLE METABOLITE PLOT ...NEEDS TO BE ACTIVATED!
+
+```
+
+```{r}
+
+library(gt)
+library(glue)
+library(data.table)
+
+all_mean_FC <- aggregate(norm.data[], list(norm.data$status), mean)
+all_mean_FC <- t(all_mean_FC)
+#this code will create table with the means for all the FC calculated earlier
+
+all_mean_FC <- all_mean_FC[-c(1,2), ]  
+#deletes two rows 
+
+options(digits = 3)
+
+all_mean_FC <- as.data.frame(all_mean_FC)
+#saves as data frame
+
+
+setDT(all_mean_FC, keep.rownames = TRUE)[]
+#makes row names into column and turns to data.table
+names(all_mean_FC)[names(all_mean_FC) == "rn"] <- "Metabolite"
+names(all_mean_FC)[names(all_mean_FC) == "V1"] <- "Dart"
+names(all_mean_FC)[names(all_mean_FC) == "V2"] <- "Dropnet"
+names(all_mean_FC)[names(all_mean_FC) == "V3"] <- "Helicopter"
+#changes names of the columns 
+
+all_mean_FC <- all_mean_FC[-c(1,2), ]  
+#deletes two rows 
+
+#is.num <- sapply(all_mean_FC, is.numeric)
+#all_mean_FC[is.num] <- lapply(all_mean_FC[is.num], round, 3)
+#tries to round the results--not working as of 8/28/20...also only want to do this because of the table 
+
+
+
+##MAKE THIS A GT TABLE 
+gt_tbl <- gt(data = all_mean_FC)
+
+# Show the gt Table
+gt_tbl <-gt_tbl %>%
+  tab_header(
+    title = "Title_Here",
+    subtitle = "Mean Fold Changes Between Metabolites"
+  )
+
+gt_tbl <- 
+  gt_tbl %>%
+  tab_source_note(
+    source_note = "One Way ANOVA, Adjusted p-value (FDR) cutoff:0.05, Tukey's post-hoc analysis "
+  )
+
+
+# Show the gt Table
+gt_tbl
+#still need to write code to export the 
+gtsave(gt_tbl, filename = "Full_ANOVA_FC_Mean_Table.pdf")
+
+```
+
+#this was done to calculate the specific differences between the groups for ONE specific metabolite and to visualize it
+
+status <- as.data.frame(norm.data$status)
+
+single.metabolite <- as.data.frame(norm.data$Urea)
+#change the specific metabolite here
+
+combined.data <- cbind(status, single.metabolite)
+
+names(combined.data)[names(combined.data) == "norm.data$status"] <- "Capture"
+names(combined.data)[names(combined.data) == "norm.data$Urea"] <- "Metabolite"
+
+example_metab <-aggregate(combined.data[, 2], list(combined.data$Capture), mean)
+#above code will show specific metabolite
+example_metab
+
+is.num <- sapply(example_metab, is.numeric)
+example_metab[is.num] <- lapply(example_metab[is.num], round, 3)
+
+
+#creates ggplot2 objects
+FC_barplot <- ggplot(data=example_metab, aes(x=Group.1, y=x, fill = Group.1)) +
+                geom_bar (stat = "identity") +
+                geom_text(aes(label=x), vjust=-0.3, size=2.0)+
+                theme_minimal() +
+                ggtitle("Mean (Insert_metabolite) Fold Change") +
+                ylab("Fold Change (FC)") + 
+                xlab("Adjusted p value (FDR) cutoff (p<0.05)") +
+                theme(text = element_text(face = "bold", size = 4.0)) +
+                scale_fill_manual(values=c("#1B9E77", "#7570B3", "#D95F02"))+
+                #Manually changes the color of the variables 
+                #https://www.rapidtables.com/web/color/RGB_Color.html
+                #see above website for good tool to find color
+                theme(legend.title = element_blank()) +
+                #deletes legend title
+                theme(legend.position='none') +
+                # deletes entire legend
+                theme(axis.text=element_text(size=10), axis.title=element_text(size=14,face="bold")) +
+                #changes the size of axis text (first), and then size of axis labels (second)
+                #theme(legend.background = element_rect(fill= NULL, size=0.5, linetype="solid", colour ="black")) +
+                #creates box around legend 
+                #facet wraps --> set number of rows here also specifies the width of the facets
+                theme(plot.title = element_text(size=22)) 
+                #change sizew of title
+                #ylim(-2, 2)
+                #changes y limits for size 
+            #FC_barplot
+            
+ggsave("Single_Metabolite_ANOVA.tiff", plot = FC_barplot, units="in", width= 6, height=5, dpi=1000, compression = 'lzw')
