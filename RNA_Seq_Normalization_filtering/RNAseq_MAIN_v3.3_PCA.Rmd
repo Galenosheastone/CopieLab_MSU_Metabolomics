@@ -1,0 +1,757 @@
+---
+title: "RNAseq_PCA_Tool"
+author: "Galen O'Shea-Stone"
+date: "2022-09-22"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#library(MetaboAnalystR)
+library(tidyverse)
+library(rpca)
+#library(ggbiplot)
+library(caret)
+library(gplots)
+library(mixOmics)
+library(plotly)
+library(ggfortify)
+library(ggrepel)
+library(vegan)
+library(gridExtra)
+library(ggvegan)
+library(ggpubr)
+#library(MVN)
+library(edgeR)
+library(DESeq2)
+library(RColorBrewer)
+library(pheatmap)
+library(limma)
+library(biomaRt)
+
+
+```
+
+```{r}
+
+#FOR THE CODE BELOW--NEED TO REMOVE: "treatment' or whatever experimental parameters here. This should just be reading in the gene ID, the count data and sample ID that matches the file for making the grouping factor below for 'm.data.counts'
+
+#taken from: https://sbc.shef.ac.uk/workshops/2018-07-10-rna-seq/rna-seq-preprocessing.nb.html#resources_and_data_files
+
+#MAIN WEBSITE: https://sbc.shef.ac.uk/workshops/2018-07-10-rna-seq/
+
+seqdata <- read.csv("MAIN_RNA_seq_Example_Data_NO_TREATMENT.csv", stringsAsFactors = FALSE)  
+#seqdata <- seqdata[-c(1),]
+countdata <- seqdata[,-(1)] 
+#countdata <- countdata[,-(13:16)]
+#Not sure why this is till here..used before to trim weird dataset-> made it so multi group PCA didn't work: 1/4/2023 deleted
+rownames(countdata) <- seqdata[,1]
+
+
+colSums(countdata)
+
+#CODE STILL NEEDS TO BE TIDIED UP QUITE A BIT 
+
+myCPM <-cpm(countdata)
+head(myCPM)
+
+# Which values in myCPM are greater than 0.5?
+thresh <- myCPM > 0.5
+# This produces a logical matrix with TRUEs and FALSEs
+head(thresh)
+# Summary of how many TRUEs there are in each row
+# There are 11433 genes that have TRUEs in all 12 samples.
+rowSums(head(thresh))
+table(rowSums(thresh))
+
+# we would like to keep genes that have at least 2 TRUES in each row of thresh
+keep <- rowSums(thresh) >= 2
+summary(keep)
+
+# Subset the rows of countdata to keep the more highly expressed genes
+counts.keep <- countdata[keep,]
+dim(countdata)
+dim(counts.keep)
+
+#we now have a dataframe (counts.keep) that contains the filtered data counts with CPM threshhold of 0.5
+
+m.data.all <- counts.keep
+#reads the saved and filtered data into the previous code structure 
+m.data.all <- t(m.data.all)
+m.data.all <- as.data.frame(m.data.all)
+#colnames(m.data.all) <- m.data.all[1, ] 
+#m.data.all <- m.data.all[-c(1),]
+#m.data.all <- as.matrix(m.data.all)
+{m.data.groups <- read.csv("RNA_seq_Example_Data.csv")
+#m.data.groups <- m.data.groups[-c(14,15,16,17)]
+  #same as above... used before to trim weird dataset-> made it so multi group PCA didn't work: 1/4/22023 deleted
+m.data.groups <- t(m.data.groups)
+m.data.groups <- as.data.frame(m.data.groups)
+m.data.groups <- m.data.groups[-c(1,13,14,15,16),]
+m.data.groups <- m.data.groups$V1
+
+
+m.data.groups <- as.data.frame(m.data.groups)
+#m.data.groups <- rename(m.data.groups, Group = m.data.groups)
+#used to previously 
+}
+#tidies up data--needed for the long --> wide formatting with the code below
+#this will need to be changed if the data is in another format. See original PCA code v6.7 if needed to see the format that it should be in 
+
+#m.data.groups <- as.factor(m.data.groups)
+#creates a specific column which is just the treatment group
+dds <- DESeqDataSetFromMatrix(counts.keep,
+                              colData = m.data.groups,
+                              design = ~m.data.groups)
+dds
+#THIS WILL CREATE THE "dds" object (DEseqDataSet) that will be used in the rest of the script 
+dds <- estimateSizeFactors(dds)
+plotSparsity(dds)
+#A simple plot of the concentration of counts in a single sample over the sum of counts per gene. Not technically the same as "sparsity", but this plot is useful diagnostic for datasets which might not fit a negative binomial assumption: genes with many zeros and individual very large counts are difficult to model with the negative binomial distribution.(see below)
+
+# The names argument tells the barplot to use the sample names on the x-axis
+# The las argument rotates the axis names
+barplot(colSums(assay(dds)), names=colData(dds)$SampleName, las=2, main="Barplot of library sizes")
+abline(h=20e6, lty=2)
+
+# Get log2 counts
+vsd <- vst(dds,blind=TRUE)
+# Check distributions of samples using boxplots
+{boxplot(assay(vsd), xlab="", ylab="Log2 counts per million",las=2)
+# Let's add a blue horizontal line that corresponds to the median logCPM
+abline(h=median(assay(vsd)), col="red", main="Boxplots of logCPMs (unnormalised)")
+}
+
+sampleDists <- dist(t(assay(vsd)))
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd$CellType, vsd$Status, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+
+plotPCA(vsd,intgroup="m.data.groups", returnData = FALSE)
+plotPCA(vsd,intgroup="m.data.groups", returnData = TRUE)
+
+plotPCAdata <- plotPCA(vsd,intgroup="m.data.groups",ntop = 100, returnData = TRUE)
+
+plotPCAdata
+
+sampledistDF <- as.data.frame(sampleDistMatrix)
+
+```
+
+```{r}
+X <- sampledistDF
+X <- (m.data.all)
+
+#X <-log10(X)
+  
+#X <- X * -1
+#creates vector with only numerical matrix
+Y <- as.factor(m.data.groups)  
+#creates factor vector with group separation
+set.seed(0666)
+#for reproducibility
+
+## PCA function
+pca.res <- pca(X, ncomp = 5, max.iter = 100, center = TRUE, scale = FALSE,  tol = 1e-09, logratio = "none")
+# where ncomp is the number of components wanted
+#computes PCA model using MixOmics package 
+
+plot(pca.res)  # screeplot of the eingenvalues (explained variance per component)
+
+test.pca <- plotIndiv(pca.res)
+
+```
+
+```{r}
+contrib_metabs <- as.data.frame(pca.res$loadings$X)
+
+contrib_metabs <- tibble::rownames_to_column(contrib_metabs, "Metabolite")
+
+contrib_metabs <-contrib_metabs[order(contrib_metabs$PC1), ]
+#sorts them
+contrib_metabs$Metabolite <- factor(contrib_metabs$Metabolite, levels = contrib_metabs$Metabolite)
+# convert to factor to retain sorted order in plot.
+#not used reight now. Might use later 
+contrib_metabs$PC1 <- round(contrib_metabs$PC1, 4)
+#this is needed to simplify the amount of decimals for the later plots
+
+contrib.metab.fig <- ggplot(contrib_metabs, aes(x=Metabolite, y=PC1, fill = PC1)) + 
+                      geom_bar(stat='identity', width=.5)  +
+                      scale_fill_continuous(low="blue", high="red") +
+                      theme_bw() +
+                      labs(subtitle="", 
+                           title= "PCA Metabolite Importance: Component 1 ") +
+                        ylab("Importance") +
+                        xlab("") +
+                        labs (fill = "Importance") +
+                      coord_flip()
+#creates diverging bars plot
+
+
+#contrib.metab.fig 
+
+ggsave("Importance_PC1.pdf", plot = contrib.metab.fig, units="in", width= 8, height=10, dpi=4000)
+#ggsave("Importance.tiff", plot = contrib.metab.fig, units="in", width= 7, height=9, dpi=1000, compression = 'lzw')
+
+
+contrib_metabs2 <- as.data.frame(pca.res$loadings$X)
+
+contrib_metabs2 <- tibble::rownames_to_column(contrib_metabs2, "Metabolite")
+contrib_metabs2 <-contrib_metabs[order(contrib_metabs$PC2), ]
+#sorts them
+contrib_metabs2$Metabolite <- factor(contrib_metabs2$Metabolite, levels = contrib_metabs2$Metabolite)
+# convert to factor to retain sorted order in plot.
+#not used reight now. Might use later 
+contrib_metabs$PC2 <- round(contrib_metabs$PC2, 4)
+#this is needed to simplify the amount of decimals for the later plots
+contrib.metab.fig <- ggplot(contrib_metabs2, aes(x=Metabolite, y=PC2, fill = PC2)) + 
+                      geom_bar(stat='identity', width=.5)  +
+                      scale_fill_continuous(low="blue", high="red") +
+                      theme_bw() +
+                      labs(subtitle="", 
+                           title= "PCA Metabolite Importance: Component 2 ") +
+                        ylab("Importance") +
+                        xlab("") +
+                        labs (fill = "Importance") +
+                      coord_flip()
+#creates diverging bars plot
+
+#contrib.metab.fig 
+
+ggsave("Importance_PC2.pdf", plot = contrib.metab.fig, units="in", width= 8, height=10, dpi=4000)
+#ggsave("Importance2.tiff", plot = contrib.metab.fig, units="in", width= 7, height=9, dpi=1000, compression = 'lzw')
+
+
+contrib_metabs3 <- as.data.frame(pca.res$loadings$X)
+
+contrib_metabs3 <- tibble::rownames_to_column(contrib_metabs3, "Metabolite")
+contrib_metabs3 <-contrib_metabs[order(contrib_metabs$PC3), ]
+#sorts them
+contrib_metabs3$Metabolite <- factor(contrib_metabs3$Metabolite, levels = contrib_metabs3$Metabolite)
+# convert to factor to retain sorted order in plot.
+#not used reight now. Might use later 
+contrib_metabs$PC3 <- round(contrib_metabs$PC3, 4)
+#this is needed to simplify the amount of decimals for the later plots
+contrib.metab.fig <- ggplot(contrib_metabs3, aes(x=Metabolite, y=PC3, fill = PC3)) + 
+                      geom_bar(stat='identity', width=.5)  +
+                      scale_fill_continuous(low="blue", high="red") +
+                      theme_bw() +
+                      labs(subtitle="", 
+                           title= "PCA Metabolite Importance: Component 3 ") +
+                        ylab("Importance") +
+                        xlab("") +
+                        labs (fill = "Importance") +
+                      coord_flip()
+#creates diverging bars plot
+
+#contrib.metab.fig 
+
+ggsave("Importance_PC3.pdf", plot = contrib.metab.fig, units="in", width= 8, height=10, dpi=4000)
+#ggsave("Importance2.tiff", plot = contrib.metab.fig, units="in", width= 7, height=9, dpi=1000, compression = 'lzw')
+
+
+#FROM OLDER VERSION OF CODE...NOW ONLY USED FOR COMPARISON TO THE NEW PLOT FOR QC CHECK
+contrib.metabs <- plotLoadings(pca.res, comp = 1, contrib = 'max', method = 'median', legend.title = "Capture", ndisplay = 20, size.legend = 1, title = "Importance to Component 1", size.title = 1.0)
+#change the desired component here#loads the data as a dataframe using plotLoading function from MixOmics
+#***MAKE SURE TO LOOK AT ENTIRE PLOT BY MAXIMIZING TO COMPARE!!! Plot shown below is truncated version
+
+
+###FOR 3D PLSDA SEE BELOW!!!!####
+#plotIndiv(plsda.res, style="3d")
+#use this to create a 3D PLSDA
+
+
+```
+
+```{r}
+
+set.seed(0666) # for reproducbility here, otherwise increase nrepeat
+
+pca.test <- pca.res$variates$X
+
+pca.data <- (pca.res$variates$X)
+#pulls the scores data from the plsda model 
+
+pca.data <- as.data.frame(pca.data)
+#changes into dataframe for ggplot 
+
+m.data.groups <- as.data.frame(m.data.groups)
+#changes groups back into dataframe instead of matrix 
+
+new.pca.data <- cbind(pca.data, m.data.groups)
+#combines the groups with the plsda components data 
+
+names(new.pca.data)[names(new.pca.data) == "m.data.groups"] <- "Group"
+#changes column name to Label (just to tidy up)
+
+comp.var <- as.data.frame(pca.res$prop_expl_var)
+#pulls out the explained variances for the selected components 
+comp.var <- as.data.frame(t(comp.var))
+#transposes the dataframe for referencing 
+
+comp1.var <-comp.var$`PC1`
+comp2.var <-comp.var$`PC2`
+comp3.var <-comp.var$`PC3`
+
+##BELOW WILL BE THE VARIENCES FOR COMP 1 & 2##
+comp1.var
+#component 1 variance 
+comp2.var
+#component 2 variance 
+comp1.var <- comp1.var *100
+comp2.var <- comp2.var *100
+comp3.var <- comp3.var *100
+#multiplies both by 100 for %
+comp1.var <- signif(comp1.var, 4)
+comp2.var <- signif(comp2.var, 4)
+comp3.var <- signif(comp3.var, 4)
+print("Above are the variences for component 1 (top) and component 2 (bottom)")
+#see the end of chunk
+
+pca.plot <- ggplot(plotPCAdata, aes(x= PC1, y= PC2, color = group)) +
+              geom_jitter(size = 1.6, shape = 19, fill = "black", stroke = 1.4, aes(color = group)) +
+              #change the shape and size of the points above 
+              theme_bw() +
+              #changes the theme of the plot 
+              ggtitle("dgA vs PNU vs Untreated: 6Hr") +
+              ###MAKE SURE TO INSERT TITLE HERE
+              xlab(paste("Component 1:", comp1.var, "%"))+
+              ylab(paste("Component 2:", comp2.var, "%")) +
+              #inserts variance for specific components  
+              theme(axis.text=element_text(size=14),
+              axis.title=element_text(size=16,face="bold")) + 
+              #use this to change the size of the axis labels 
+              scale_color_manual(name="Variety", values=c("black","orange", "skyblue", " mediumslateblue")) +
+              #changes the color nanually and easier than below using scale_color_hue
+              stat_ellipse(type = "t", geom = "polygon", alpha = 1/4, aes(fill = group), show.legend = FALSE) + 
+              scale_fill_manual(values=c("black","orange", "skyblue", " mediumslateblue")) 
+              #geom_text(label = m.data)
+
+  
+pca.plot <- pca.plot + stat_ellipse(type = "t") 
+#sets the confidence interval type (norm = 95%) --> this can be customized(see below)
+#The default "t" assumes a multivariate t-distribution, and "norm" assumes a multivariate normal distribution. "euclid" draws a circle with the radius equal to level, representing the euclidean distance from the center. This ellipse probably won't appear circular unless coord_fixed() is applied.
+#plsda.plot <- plsda.plot + scale_color_brewer(palette="dark2")
+#uses scale color brewer to set colors
+
+#plsda.plot <- plsda.plot + scale_color_hue(l=70, c=90)
+#The lightness (l) and the chroma (c, intensity of color) of the default 
+#(hue) colors can be modified using the functions scale_hue 
+
+
+###OR###
+
+#insert this for color
+#scale_color_manual(name="Variety", values=c("springgreen2", "firebrick2")) 
+#change colors manually using R names 
+  
+#Insert code to change the title here if needed 
+
+pca.plot <- pca.plot + theme(plot.title = element_text( face = "bold", color = "black", size = NA))
+
+
+#below is options for the legend of the PLSDA plot
+pca.plot <- pca.plot +
+  theme(legend.position="right") +
+              theme(legend.title = element_text(colour="Black", size=14, face="plain")) +
+              theme(legend.text = element_text(colour="black", size=14, face="plain")) +
+              #theme(legend.background = element_rect(fill="lightblue", size=0.5, linetype="solid", colour ="darkblue")) +
+              #creates box around legend 
+              theme(legend.title = element_blank()) +
+              #removes plot legend title
+              theme(legend.position='bottom') 
+              
+#removes entire legend or changes the location of legend ("left", "right", "bottom" etc... )
+              #scale_x_reverse()
+              #this is needed to flip x axis to match metaboanalyst as of 10/14/20 ...sometimes...
+              #double check that this is needed and turn off or on as needed
+
+
+pca.plot
+#shows the plot for pre-editing
+
+
+#Saves ROC and PLSDA to working directory 
+
+#work on plotting the ROC better in later builds
+
+ggsave("High_Quality_PCA.pdf", plot = pca.plot, units="in", width= 12, height= 10, dpi=5000)
+#turn this off if you don't want a pdf version
+
+
+#ggsave("High_Quality_PLSDA.tiff", plot = plsda.plot, units="in", width= 6, height=5, dpi=400, compression = 'lzw')
+#creates a high quality file of the PLSDA plot in the working dir 
+#use the above code to make journal quality files
+
+
+
+get_legend(pca.plot, position = "right")
+
+leg <- get_legend(pca.plot)
+leg <- as_ggplot(leg)
+
+ggsave("Legend_here.pdf", plot = leg, units = "in", width= 10, height= 10, dpi= 2000 )
+
+#This is used to pull out just the legend of the plot for final figure creation if needeed--> will be a seperate pdf in folder
+
+
+
+#MV_outlier_result <- mvn(data = pca.data, mvnTest = "hz", 
+             # multivariateOutlierMethod = "quan", desc = TRUE, R = 2000)
+#above code outlier detection methods which are based on robust Mahalanobis distances (rMD(x)). Mahalanobis distance is a metric which calculates how far each observation is to the center of joint distribution, which can be thought of as the centroid in multivariate space. Robust distances are estimated from minimum covariance determinant estimators rather than the sample covariance
+#done using the 'mvn' package 
+
+
+```
+
+```{r}
+
+#differential expression 
+#https://sbc.shef.ac.uk/workshops/2018-07-10-rna-seq/rna-seq-de.nb.html from here--using the same vignette as was used before for the normalization and filtering
+
+#this needs to be done before the 3D PCA is run as the dds changes it 
+
+colData(dds)
+ddsDataCheck <- colData(dds)
+ddsDataCheck
+
+design(dds)
+
+#de <- DESeq(dds)
+
+design(dds) <- ~m.data.groups
+
+dds <- DESeq(dds)
+res <- results(dds)
+
+res 
+
+de <- dds
+#this is ugly...clean this up
+de
+
+results.treatment <- as.data.frame(results(de))
+results.treatment
+
+#write.csv(results.treatment,"Diff_Exp_Analysis_Here_FULL.csv", row.names = TRUE)
+
+
+
+comparison.data <- results(de, contrast = c("m.data.groups", "PNU_6hr", "dgA_6hr"))
+#will need to change the group types here--> can only look at the differences between two groups
+#WHICHEVER GROUP IS FIRST IN THE CODE ABOVE IS GOING TO BE THE BASELINE GROUP!!!!!
+
+write.csv(comparison.data,"Comparison_Analysis_Here_FULL.csv", row.names = TRUE)
+#use this file to generate raw data for Advata--> just for the txt file of FC and pval
+
+
+results1 <- results(de, contrast = c("m.data.groups", "dgA_6hr", "PNU_6hr"))
+results2 <- results(de, contrast = c("m.data.groups", "Untreated_6hr", "PNU_6hr"))
+results3 <- results(de, contrast = c("m.data.groups", "Untreated_6hr", "dgA_6hr"))
+
+dds.treatment <- dds
+design(dds.treatment) <- ~m.data.groups
+de.status <- DESeq(dds.treatment)         
+resultsNames(de.status)
+results.treatment <- results(de.status)
+results.treatment
+#shows what other comparisons can be made
+
+venn_data <- data.frame(dgA_v_PNU = results1$padj<0.05,
+                        Untreated_v_PNU = results2$pvalue<0.05,  
+                        Untreated_v_dgA = results3$pvalue<0.05)
+
+vennDiagram(venn_data)
+
+results.status <- results(de.status)
+results.ordered <- results.status[order(results.status$padj,decreasing = FALSE),]
+results.ordered
+write.csv(results.ordered,"Diff_Exp_ORDERED here.csv", row.names = TRUE)
+
+DESeq2::plotMA(de.status)
+
+{plot(results.ordered$log2FoldChange, -log10(results.ordered$padj),
+     pch=16,       
+     xlab="Log Fold Change",
+       ylab="Significance")
+degenes <- which(results.ordered$padj < 0.0001)
+points(results.ordered$log2FoldChange[degenes],-log10(results.ordered$padj)[degenes],
+       col="red",
+       pch=16)
+}
+
+```
+
+```{r}
+
+#USE CODE BELOW TO CREATE A BETTER VOLCANO PLOT 
+
+
+volcano.data <- as.data.frame(results.ordered)
+volcano.data.label <- tibble::rownames_to_column(volcano.data, "Entrez GeneID")
+
+write.csv(volcano.data,"VOLCANO_DATA_HERE.csv", row.names = TRUE)
+#writes new CSV with all data here--> for changing entrez--> geneID
+#https://biit.cs.ut.ee/gprofiler/convert
+#good website for manually doing this 
+#SAVE NEW FILE AS "VOLCANO_DATA_HERE_ONLY_GENEID.csv"
+
+#this needs to be done manually at the moment--> TASK: make this  automated if possible (see vigniette visualization section)
+#convert ENSBLID --> make column w/ gene names and save as the .csv balow
+volcano.data <-read_csv("VOLCANO_DATA_HERE_ONLY_GENEID.csv") 
+
+#IMPORTANT STEP: Combine Volcano data with full gProiler output and name MAIN_METADATA_HERE.csv --> then save to wd
+
+volcano.x <- results.ordered$log2FoldChange
+volcano.y <-  -log10(results.ordered$padj)
+DE.volcano.plot <- ggplot(data= volcano.data, aes (x= volcano.x, y= volcano.y))+ geom_point() + theme_minimal()
+
+
+
+# add a column of NAs
+volcano.data$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP" 
+volcano.data$diffexpressed[volcano.data$log2FoldChange > 0.6 & volcano.data$padj < 0.01] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+volcano.data$diffexpressed[volcano.data$log2FoldChange < -0.6 & volcano.data$padj < 0.01] <- "DOWN"
+DE.volcano.plot <- ggplot(data= volcano.data, aes (x= volcano.x, y= volcano.y))+ geom_point() + geom_point()
+DE.volcano.plot
+
+
+
+
+p <- ggplot(data= volcano.data, aes (x= volcano.x, y= volcano.y), color=diffexpressed) +
+  geom_point() + theme_minimal() 
+  
+p2 <- p + geom_vline(xintercept=c(-0.6, 0.6), col="red") +
+    #to show +/- ~1.5 up/down
+    geom_hline(yintercept=-log10(0.01), col="red")
+    #set p value threshold
+
+# 1. by default, it is assigned to the categories in an alphabetical order):
+p3 <- p2 + scale_color_manual(values=c("red", "black", "blue"))
+
+# 2. to automate a bit: ceate a named vector: the values are the colors to be used, the names are the categories they will be assigned to:
+mycolors <- c("red", "blue", "black")
+names(mycolors) <- c("DOWN", "UP", "NO")
+p3 <- p2 + scale_colour_manual(values = mycolors)
+
+# Now write down the name of genes beside the points...
+# Create a new column "delabel" to de, that will contain the name of genes differentially expressed (NA in case they are not)
+volcano.data$delabel <- NA
+volcano.data$delabel[volcano.data$diffexpressed != "NO"] <- volcano.data$GENEID[volcano.data$diffexpressed != "NO"]
+# Create a new column "delabel" to de, that will contain the name of genes differentially expressed (NA in case they are not)--> used modified method to make new dataframe
+#volcano.data$delabel[volcano.data$diffexpressed != "NO"] <- volcano.data.label$`Entrez GeneID`[volcano.data$diffexpressed != "NO"]
+#USE ABOVE ON LINE 577 to see the entrez geneID
+
+DE.volcanoplot.final <- ggplot(data= volcano.data, aes(x= volcano.x, y= volcano.y, color= diffexpressed, label=delabel)) + 
+    geom_point() + 
+    ggtitle("") +
+              ###MAKE SURE TO INSERT TITLE HERE
+              xlab(paste("log2 Fold Change"))+
+              ylab(paste("Significance (-log10(padj<0.01)")) +
+    theme_minimal() + 
+    geom_text_repel() + 
+    #pulls out labels and separates 
+        scale_color_manual(values=c("red", "black", "blue")) +
+  #changes color
+        geom_vline(xintercept=c(-0.6, 0.6), col="red") +
+  #adds line for FC for illustration
+        geom_hline(yintercept=-log10(0.01), col="red") +
+  #add line for pval adjustment
+      guides(color = guide_legend(title = "Diff. Exp.")) 
+  
+  
+DE.volcanoplot.final <- DE.volcanoplot.final + theme_bw()
+DE.volcanoplot.final
+
+ggsave("DE_VolcanoPlot_here.pdf", plot = DE.volcanoplot.final, units = "in", width= 10, height= 10, dpi= 2000 )
+
+```
+
+```{r}
+
+gene.number.here <-"ENSG00000177606"
+#INSERT THE GENE NUMBER HERE  
+
+
+{plotCounts(dds, gene.number.here, intgroup = c("m.data.groups"), returnData = TRUE)
+plotCounts(dds, gene.number.here, intgroup = c("m.data.groups"), returnData = FALSE)
+#getting data ready here
+
+DE.single.gene.plot <- plotCounts(dds, gene.number.here, intgroup = c("m.data.groups"), returnData = TRUE)
+  
+p <- ggplot(DE.single.gene.plot, aes (x = m.data.groups, y = count, fill = m.data.groups)) +
+  stat_boxplot(outlier.colour="red", outlier.shape=21, outlier.size=1) +
+  stat_summary(fun= mean, color = "yellow", geom= "point", shape= 18, size=2) +
+  geom_jitter(shape=16, position=position_jitter(0.2)) +
+  ggtitle(paste("JUN proto-oncogene, Ap1 TF subunit" )) +
+
+  #ggtitle(paste("EntrezGeneID:", gene.number.here )) +
+  #if using entrezID
+  xlab("Treatment") + ylab("Counts") +
+  theme(legend.position="bottom") +
+  labs(fill="")
+
+p
+}
+
+ggsave("DE_Boxplot_here.pdf", plot = p, units = "in", width= 10, height= 10, dpi= 2000 )
+
+
+```
+
+```{r}
+#3D PCA DEVELOPMENT CHUNK
+
+dds3DPCA <- rlog( dds, blind = T )
+rv <- rowVars(assay(dds3DPCA))
+# select the ntop genes by variance
+select <- order(rv, decreasing=TRUE)[seq_len(min( length(rv)))]
+# perform a PCA on the data in assay(x) for the selected genes
+pca <- prcomp(t(assay(dds3DPCA)[select,]))
+PC1=pca$x[,1]
+PC2=pca$x[,2]
+PC3=pca$x[,3]
+
+
+
+PCA.data.3D <- as.factor(plotPCAdata$group)
+
+
+comp1.var
+comp2.var
+comp3.var
+
+PC1.X <- PC1
+PC2.Y <- PC2
+PC3.Z <- PC3
+
+
+
+fig <- plot_ly(plotPCAdata, x = ~PC1, y = ~PC2, z = ~PC3, color = ~group, colors = c("black","orange", "skyblue"))
+               marker = list(color = ~PC1, colorscale = c('#FFE1A1', '#683531'), showscale = TRUE)
+fig <- fig %>% add_markers(marker = list(size = 5,
+                             #color = c("darkorchid2","darkorange"),
+                             line = list(color = c ("blue4","black"),
+                                         width = 1)))
+fig <- fig %>% layout(title = "dgA vs PNU vs Untreated: 6Hr", plot_bgcolor = "#e5ecf6")
+fig <- fig %>% layout(scene = list(xaxis = list(title = "PC 1: 76.9%"),
+                     yaxis = list(title = "PC 2: `15.8`%"),
+                     zaxis = list(title = "PC 3: 3.8%")))
+fig
+#export(fig, file = "3D_Scatterplot.png")
+
+###TO GET THE VARIANCE FOR 3D: CLICK "R Console" below (next to plotly) and enter in the corresponding axis above
+```
+
+#exploring to make a useful biplot--\>doesn't work as of 10/26/22 Y.df
+\<- as.data.frame(Y) #Y.df \<- rename(Y.df, Treatment = Y) #if this is
+an error try clearing environment and restarting R over again... not
+sure what is interfering
+
+X \<- as.matrix(X) pca_res \<- prcomp(X,scale = TRUE, retx = TRUE)
+#creates prcomp object
+
+biplot.obj \<- autoplot(pca_res, data = Y.df, colour = 'Treatment',
+label = FALSE, label.size = 10, loadings = TRUE, loadings.label = TRUE,
+loadings.label.size = 5, loadings.colour = 'black', frame = TRUE,
+frame.type = "t", loadings.label.repel=TRUE, max.overlaps = 25) +
+ggtitle(label = "YOUR_TITLE_HERE: PCA Biplot") + theme_classic() +
+scale_color_manual(values=c("black","orange", "skyblue", "
+mediumslateblue")) + #changes the color nanually and easier than below
+using scale_color_hue stat_ellipse(type = "t", geom = "polygon", alpha =
+1/4, aes(fill = Treatment), show.legend = FALSE) +
+scale_fill_manual(values=c("black","orange", "skyblue", "
+mediumslateblue")) #if there are too may vertors that show up reset
+environment and redo biplot.obj
+
+ggsave("High_Quality_PCA_biplot.pdf", plot = biplot.obj, units="in",
+width= 14, height= 12, dpi=5000)
+
+#THE BELOW CHUNK DOES ALL THE PERMANOVA ANALYSIS 
+
+m.data.PERMANOVA <- read.csv("data_normalized.csv")
+m.data.PERMANOVA <- m.data.PERMANOVA[-c(1)]
+#reads in all data and gets rid of the X comumn (sample ID)
+
+
+
+X <- X * -1
+#creates vector with only numerical matrix
+
+set.seed(666)
+
+PERMANOVA.results <- adonis(m.data.groups ~ m.data.groups, data = m.data.PERMANOVA, permutations =  999, method = "euclidean" )
+#can change method to any below
+#Dissimilarity index, partial match to "manhattan", "euclidean", "canberra", "clark", "bray", "kulczynski", "jaccard", "gower", "altGower", "morisita", "horn", "mountford", "raup", "binomial", "chao", "cao", "mahalanobis", "chisq" or "chord".
+
+PERMANOVA.results2 <- adonis2(X ~ Label, data = m.data.PERMANOVA, permutations =  999, method = "euclidean", by = "margin")
+# by = NULL tests if model as whole is significant 
+#by = "margins" means order doesnt matter in model 
+
+
+PERMANOVA.results
+PERMANOVA.results2
+
+PMANOVA.table <- as.data.frame(PERMANOVA.results$aov.tab)
+PMANOVA.table2 <- as.data.frame(PERMANOVA.results2$aov.tab)
+
+ANOSIM.data <- read.csv("data_normalized.csv")
+ANOSIM.data <- ANOSIM.data[-c(1)]
+
+
+
+metab.dist <- vegdist(X, method = "euclidian")
+attach(ANOSIM.data)
+metab.ano <- anosim(metab.dist, Label, permutations = 999, distance = "euclidian")
+summary(metab.ano)
+plot(metab.ano)
+
+
+PERMANOVA.results
+PERMANOVA.results2
+
+metab.ano
+
+#BELOW DOES THE ANOSIM ANALYSIS 
+
+anosim.plot <-autoplot(metab.ano, colour = metab.ano$class.vec,  notch = TRUE, varwidth = TRUE,
+  xlab = "Group", ylab = "Dist. Rank", title = "Analysis of similarities",
+  subtitle = NULL) + 
+  scale_fill_manual(values=c("darkorchid2","darkorange", "springgreen2", "cyan")) 
+
+
+anosim.plot
+
+fortified.metab.ano <- fortify(metab.ano)
+
+#This isi to make a violin ploot of the ANOSIM results 
+dodge <- position_dodge(width = 1.0)
+
+ANOSIM.violin <- ggplot(fortified.metab.ano, aes(y = Rank, x = Class, fill = Class)) +
+  geom_violin(trim= FALSE, position = dodge) +
+  theme_bw() +
+  scale_fill_manual(values=c("white", "darkorchid2","darkorange", "springgreen2", "cyan")) +
+  ggtitle("Analysis of similarities: TITLE_HERE") +
+  ylab("Rank") + 
+  xlab("Class") 
+
+ANOSIM.violin <- ANOSIM.violin + geom_boxplot(width=0.1, position = dodge, notch = TRUE)
+
+ANOSIM.violin
+
+ggsave("ANOSIM_violin.pdf", plot = ANOSIM.violin, units="in", width= 14, height= 12, dpi=5000)
+
